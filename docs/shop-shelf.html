@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>商店 - 展示架 v3</title>
+<style>
+:root { --bg:#070710; --shelf-wood:#1a1612; --shelf-edge:#2a2218; --gold:#d4a535; --blue:#3b6fb6; --text:#b8b8c0; --dim:#585868; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:var(--bg); font-family:'Segoe UI',system-ui,sans-serif; color:var(--text);
+  display:flex; justify-content:center; align-items:center; min-height:100vh;
+  background-image: radial-gradient(ellipse at 50% 0%, #111128 0%, transparent 60%);
+}
+.shop-floor { width:960px; position:relative; padding-bottom:24px; }
+
+/* Top bar */
+.topbar {
+  display:flex; align-items:center; gap:16px;
+  padding:10px 20px; background:rgba(12,12,20,.9); border-bottom:1px solid #1f1f30;
+}
+.gold-pill { background:var(--gold); color:#000; font-weight:700; font-size:15px; padding:3px 14px; border-radius:12px; }
+.stage-tag { font-size:12px; color:var(--dim); }
+.stage-tag span { color:#c0a070; }
+.btn-exit { margin-left:auto; background:#1a1a28; color:var(--dim); border:1px solid #2a2a38; padding:4px 14px; border-radius:4px; cursor:pointer; font-size:11px; }
+
+/* Intel strip — TOP, below topbar */
+.intel-strip {
+  margin:6px 16px 8px 16px;
+  display:flex; gap:0;
+  background:linear-gradient(180deg, #0e0e1a 0%, #0c0c14 100%);
+  border:1px solid #1a1a2a; border-radius:6px; overflow:hidden;
+}
+.intel-block { flex:1; padding:8px 12px; border-right:1px solid #161626; }
+.intel-block:last-child { border-right:none; flex:0.5; }
+.intel-block .label { font-size:9px; color:#3a3a50; margin-bottom:2px; }
+.intel-block .value { font-size:11px; color:#808098; }
+.btn-next { background:#1a2a1a; color:#3a7a3a; border:1px solid #2a3a2a; padding:8px; border-radius:4px; cursor:pointer; font-size:12px; width:100%; text-align:center; }
+
+/* Shelf */
+.shelf-area { padding:0 16px; }
+.shelf {
+  position:relative;
+  background:linear-gradient(180deg, var(--shelf-wood) 0%, #16100e 100%);
+  border-radius:4px; padding:4px 8px 3px 8px;
+  box-shadow:0 2px 0 var(--shelf-edge), 0 4px 8px rgba(0,0,0,.5);
+}
+.shelf:before {
+  content:''; position:absolute; top:0; left:8px; right:8px; height:1px;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.06), transparent);
+}
+.shelf-label { font-size:9px; color:#3a2a1a; text-transform:uppercase; letter-spacing:2px; margin-bottom:2px; }
+.shelf-items { display:flex; gap:8px; }
+
+.item-card {
+  width:140px; height:180px;
+  background:linear-gradient(180deg, #121226 0%, #0e0e1c 80%, #0a0a14 100%);
+  border-radius:4px; border:1px solid #1e1e30;
+  display:flex; flex-direction:column; cursor:pointer; position:relative; overflow:hidden;
+  transition:transform .1s, border-color .1s, box-shadow .1s;
+}
+.item-card:hover { transform:translateY(-4px); border-color:#3a3a5a; box-shadow:0 6px 16px rgba(0,0,0,.6); }
+.item-card .card-top { height:4px; border-radius:4px 4px 0 0; flex-shrink:0; }
+.item-card .card-icon { flex:1; display:flex; align-items:center; justify-content:center; font-size:36px; opacity:.15; }
+.item-card .card-name { font-size:11px; color:#c0c0d0; padding:0 8px; text-align:center; }
+.item-card .card-price { font-size:14px; color:var(--gold); font-weight:700; text-align:center; padding:2px 8px 8px 8px; }
+.item-card .card-rarity { position:absolute; top:8px; right:6px; font-size:8px; padding:1px 5px; border-radius:3px; color:rgba(255,255,255,.7); }
+.item-card.sold { opacity:.35; pointer-events:none; filter:grayscale(.6); }
+
+/* Refresh */
+.refresh-area { text-align:center; padding:8px 0 2px; }
+.btn-refresh { background:#1a1a2e; color:var(--dim); border:1px solid #2a2a3e; padding:5px 18px; border-radius:4px; cursor:pointer; font-size:11px; }
+
+/* Inventory wall hooks — BOTTOM */
+.inv-wall {
+  margin:4px 16px;
+  display:flex; gap:8px; align-items:flex-start; position:relative;
+  padding-top:2px;
+}
+.inv-wall:before {
+  content:''; position:absolute; top:0; left:-8px; right:-8px; height:1px;
+  background:linear-gradient(90deg, transparent, #2a2a3e 20%, #2a2a3e 80%, transparent);
+}
+.inv-tag { font-size:9px; color:#3a3a50; padding-top:4px; margin-right:4px; }
+.inv-card {
+  height:24px; padding:0 8px; min-width:70px;
+  background:linear-gradient(180deg, #0d0d18 0%, #0f0f1e 100%);
+  border:1px solid #1a1a2e; border-radius:3px 3px 0 0;
+  font-size:10px; color:#3a6a9a; display:flex; align-items:center;
+}
+</style>
+</head>
+<body>
+
+<div class="shop-floor">
+  <div class="topbar">
+    <div class="gold-pill">💰 356</div>
+    <div class="stage-tag">破烂后院 · <span>商店</span></div>
+    <button class="btn-exit">退出</button>
+  </div>
+
+  <!-- Intel strip -->
+  <div class="intel-strip">
+    <div class="intel-block"><div class="label">变质规则</div><div class="value">标准模式</div></div>
+    <div class="intel-block"><div class="label">关卡进度</div><div class="value">破烂后院 · 第2节点</div></div>
+    <div class="intel-block"><div class="label">已击败 Boss</div><div class="value">暂无</div></div>
+    <div class="intel-block"><div class="btn-next">继续</div></div>
+  </div>
+
+  <!-- Shelf -->
+  <div class="shelf-area">
+    <div class="shelf">
+      <div class="shelf-label">货品展示架</div>
+      <div class="shelf-items">
+        <div class="item-card"><div class="card-top" style="background:#8a8a80"></div><div class="card-icon">🎲</div><div class="card-name">重摇石</div><div class="card-price">10</div><div class="card-rarity" style="background:rgba(120,120,110,.3)">普通</div></div>
+        <div class="item-card"><div class="card-top" style="background:#3b6fb6"></div><div class="card-icon">📌</div><div class="card-name">定格骰</div><div class="card-price">30</div><div class="card-rarity" style="background:rgba(59,111,182,.3)">稀有</div></div>
+        <div class="item-card"><div class="card-top" style="background:#8a8a80"></div><div class="card-icon">🔄</div><div class="card-name">翻转骰</div><div class="card-price">10</div><div class="card-rarity" style="background:rgba(120,120,110,.3)">普通</div></div>
+        <div class="item-card"><div class="card-top" style="background:var(--gold)"></div><div class="card-icon">✨</div><div class="card-name">命运骰</div><div class="card-price">60</div><div class="card-rarity" style="background:rgba(212,165,53,.3)">传说</div></div>
+        <div class="item-card"><div class="card-top" style="background:#8a8a80"></div><div class="card-icon">🔇</div><div class="card-name">静默回合</div><div class="card-price">8</div><div class="card-rarity" style="background:rgba(120,120,110,.3)">普通</div></div>
+        <div class="item-card"><div class="card-top" style="background:#3b6fb6"></div><div class="card-icon">🔭</div><div class="card-name">热感视觉</div><div class="card-price">25</div><div class="card-rarity" style="background:rgba(59,111,182,.3)">稀有</div></div>
+      </div>
+    </div>
+    <div class="refresh-area"><button class="btn-refresh">刷新货架 · 5点</button></div>
+  </div>
+
+  <!-- Inventory hooks -->
+  <div class="inv-wall">
+    <div class="inv-tag">道具栏</div>
+    <div class="inv-card">净化芯片</div>
+    <div class="inv-card">透屏</div>
+    <div class="inv-card">重摇石</div>
+    <div class="inv-card">命运骰</div>
+  </div>
+</div>
+
+</body>
+</html>

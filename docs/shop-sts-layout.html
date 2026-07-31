@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="UTF-8"><title>商店 - 杀戮尖塔风格</title>
+<style>
+:root { --bg:#0a0a0f; --card:#111118; --gold:#d4a535; --blue:#3b6fb6; --red:#8b2a2a; --text:#b8b8c0; --dim:#505060; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); font-family: 'Segoe UI', system-ui, sans-serif; color:var(--text); display:flex; justify-content:center; align-items:center; min-height:100vh; }
+.shop { width:960px; background:#0d0d14; border-radius:8px; overflow:hidden; display:flex; flex-direction:column; }
+.top-bar { background:#161622; padding:8px 16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid #1a1a2e; }
+.gold-badge { background:var(--gold); color:#000; padding:4px 12px; border-radius:4px; font-weight:700; font-size:15px; }
+.top-title { flex:1; font-size:14px; color:var(--dim); }
+.top-title span { color:var(--gold); }
+.btn-exit { background:#222; color:var(--dim); border:none; padding:4px 14px; border-radius:4px; cursor:pointer; font-size:12px; }
+.btn-exit:hover { color:#fff; background:#333; }
+
+/* Inventory bar */
+.inv-bar { background:#0f0f1a; padding:8px 16px; border-bottom:1px solid #1a1a2e; display:flex; align-items:center; gap:6px; }
+.inv-label { font-size:11px; color:#5a5a6e; margin-right:8px; }
+.inv-slot { width:100px; height:24px; background:#0d0d18; border:1px solid #1e1e30; border-radius:3px; font-size:10px; color:#3a6a9a; display:flex; align-items:center; padding:0 6px; }
+
+/* Main body */
+.main { display:flex; }
+.left { width:620px; padding:16px; }
+.right { width:340px; padding:16px; border-left:1px solid #1a1a2e; background:#0c0c16; }
+
+/* Shop items */
+.item-row { display:flex; align-items:center; padding:8px 10px; margin-bottom:2px; background:var(--card); border-radius:4px; cursor:pointer; transition:background .1s; }
+.item-row:hover { background:#191926; }
+.item-dot { width:8px; height:8px; border-radius:50%; margin-right:10px; flex-shrink:0; }
+.item-name { font-size:13px; color:#c0c0cc; flex:1; }
+.item-name small { color:var(--dim); font-size:10px; margin-left:6px; }
+.item-desc { font-size:10px; color:var(--dim); margin-right:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.item-price { display:flex; align-items:center; gap:4px; color:var(--gold); font-size:13px; font-weight:600; min-width:50px; text-align:right; justify-content:flex-end; }
+
+/* Refresh */
+.refresh-row { display:flex; align-items:center; justify-content:space-between; margin-top:12px; padding:6px 0; }
+.refresh-btn { background:#1a1a2e; color:var(--dim); border:1px solid #2a2a3e; padding:5px 16px; border-radius:4px; cursor:pointer; font-size:12px; transition:.1s; }
+.refresh-btn:hover { color:#fff; border-color:#4a4a6e; }
+
+/* Right panel - Intel */
+.right-title { font-size:12px; color:#6a6a82; margin-bottom:12px; text-transform:uppercase; letter-spacing:1px; }
+.info-box { background:var(--card); border-radius:4px; padding:10px; margin-bottom:8px; }
+.info-box .label { font-size:10px; color:#4a4a6e; margin-bottom:4px; text-transform:uppercase; }
+.info-box .value { font-size:12px; color:#90909e; }
+.continue-btn { background:#1a2a1a; color:#3a7a3a; border:1px solid #2a3a2a; padding:10px; border-radius:4px; cursor:pointer; font-size:14px; width:100%; margin-top:16px; text-align:center; }
+.continue-btn:hover { background:#1f3a1f; color:#4a8a4a; }
+</style>
+</head>
+<body>
+<div class="shop">
+  <!-- Top -->
+  <div class="top-bar">
+    <div class="gold-badge">💰 356</div>
+    <div class="top-title">破烂后院 · <span>商店</span></div>
+    <button class="btn-exit">退出</button>
+  </div>
+
+  <!-- Inventory -->
+  <div class="inv-bar">
+    <div class="inv-label">道具栏</div>
+    <div class="inv-slot">净化芯片</div>
+    <div class="inv-slot">透屏</div>
+    <div class="inv-slot">重摇石</div>
+    <div class="inv-slot">命运骰</div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- Left: shop items -->
+    <div class="left">
+      <div class="item-row">
+        <div class="item-dot" style="background:#8a8a80"></div>
+        <div class="item-name">重摇石 <small>普通</small></div>
+        <div class="item-desc">重摇自己任意数量骰子</div>
+        <div class="item-price">10</div>
+      </div>
+      <div class="item-row">
+        <div class="item-dot" style="background:#3b6fb6"></div>
+        <div class="item-name">定格骰 <small>稀有</small></div>
+        <div class="item-desc">固定一颗骰子点数</div>
+        <div class="item-price">30</div>
+      </div>
+      <div class="item-row">
+        <div class="item-dot" style="background:#8a8a80"></div>
+        <div class="item-name">翻转骰 <small>普通</small></div>
+        <div class="item-desc">翻转一颗骰子 (1↔6, 2↔5, 3↔4)</div>
+        <div class="item-price">10</div>
+      </div>
+      <div class="item-row">
+        <div class="item-dot" style="background:#d4a535"></div>
+        <div class="item-name">命运骰 <small>传说</small></div>
+        <div class="item-desc">所有骰子全部变为①</div>
+        <div class="item-price">60</div>
+      </div>
+      <div class="item-row">
+        <div class="item-dot" style="background:#8a8a80"></div>
+        <div class="item-name">静默回合 <small>普通</small></div>
+        <div class="item-desc">跳过自己本轮叫牌</div>
+        <div class="item-price">8</div>
+      </div>
+      <div class="item-row">
+        <div class="item-dot" style="background:#3b6fb6"></div>
+        <div class="item-name">热感视觉 <small>稀有</small></div>
+        <div class="item-desc">看一个对手的骰子分布</div>
+        <div class="item-price">25</div>
+      </div>
+
+      <div class="refresh-row">
+        <span style="font-size:11px;color:var(--dim)">不满意货品？</span>
+        <button class="refresh-btn">刷新 · 5点</button>
+      </div>
+    </div>
+
+    <!-- Right: intel -->
+    <div class="right">
+      <div class="right-title">情报</div>
+      <div class="info-box">
+        <div class="label">变质规则</div>
+        <div class="value">标准模式 — 无特殊规则</div>
+      </div>
+      <div class="info-box">
+        <div class="label">关卡进度</div>
+        <div class="value">破烂后院 · 第2节点</div>
+      </div>
+      <div class="info-box">
+        <div class="label">已击败 Boss</div>
+        <div class="value">暂无</div>
+      </div>
+      <div class="continue-btn">继续</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

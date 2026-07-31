@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>商店布局预览</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#08080c;color:#ccc;font-family:"PingFang SC","Microsoft YaHei",sans-serif;padding:20px}
+.shop{max-width:1200px;margin:0 auto}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.header h1{color:#e070a0;font-size:20px;font-weight:600}
+.pts{color:#daa520;font-size:12px;border:1px solid #daa520;padding:4px 14px;border-radius:20px}
+
+.held-bar{display:flex;align-items:center;gap:10px;padding:10px 16px;background:#111118;border-radius:8px;border:1px solid #1a2a3a;margin-bottom:14px}
+.held-bar .label{color:#3a6a9a;font-size:11px;flex-shrink:0}
+.held-slot{width:120px;height:28px;border:1px solid #2a2a2a;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#888}
+.held-slot.filled{border-color:#3a6a9a;color:#5a9aca;font-size:10px}
+.held-slot.empty{border-color:#1a1a1a;color:#333}
+
+.main{display:flex;gap:16px}
+.left{flex:2;display:flex;flex-direction:column;gap:0}
+.right{flex:1;display:flex;flex-direction:column;gap:0}
+
+.section-title{font-size:11px;font-weight:600;color:#d08030;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #1a1a1a}
+
+.shop-item{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#111118;border-radius:8px;border:1px solid #1a1a1a;margin-bottom:8px}
+.shop-item .name{font-size:13px;font-weight:500;min-width:80px}
+.shop-item .desc{font-size:11px;color:#777;flex:1;min-width:0}
+.shop-item .price{font-size:11px;color:#daa520;min-width:50px;text-align:right}
+.shop-item button{padding:4px 14px;border-radius:4px;border:1px solid #daa520;color:#daa520;background:transparent;cursor:pointer;font-size:11px;white-space:nowrap}
+.shop-item button:hover{background:rgba(218,165,32,.1)}
+.shop-item .rarity-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+
+.info-box{padding:14px 16px;background:#111118;border-radius:8px;border:1px solid #1a2a2a;margin-bottom:10px}
+.info-box .info-title{font-size:10px;color:#555;margin-bottom:6px}
+.info-box .info-body{font-size:12px;color:#888;line-height:1.6}
+
+.refresh-row{display:flex;align-items:center;gap:10px;margin-top:8px}
+.refresh-btn{padding:6px 16px;border-radius:4px;border:1px solid #e070a0;color:#e070a0;background:transparent;cursor:pointer;font-size:11px}
+.continue-btn{padding:8px 24px;border-radius:4px;border:1px solid #daa520;color:#daa520;background:transparent;cursor:pointer;font-size:12px;margin-top:12px;margin-left:auto;display:block}
+</style>
+</head>
+<body>
+<div class="shop">
+  <div class="header">
+    <h1>商 店</h1>
+    <span class="pts">金币 28</span>
+  </div>
+
+  <div class="held-bar">
+    <span class="label">已有道具</span>
+    <span class="held-slot filled">重摇石</span>
+    <span class="held-slot filled">透屏</span>
+    <span class="held-slot empty">空槽位</span>
+    <span class="held-slot empty">空槽位</span>
+    <span class="held-slot empty">空槽位</span>
+    <span class="held-slot empty">空槽位</span>
+  </div>
+
+  <div class="main">
+    <div class="left">
+      <div class="section-title">货 品</div>
+      <div class="shop-item">
+        <span class="rarity-dot" style="background:#888"></span>
+        <span class="name" style="color:#aaa">重摇石</span>
+        <span class="desc">重摇自己任意数量骰子</span>
+        <span class="price">10 点</span>
+        <button>购买</button>
+      </div>
+      <div class="shop-item">
+        <span class="rarity-dot" style="background:#5a9aca"></span>
+        <span class="name" style="color:#5a9aca">定格骰</span>
+        <span class="desc">指定一颗骰子，下一轮固定点数</span>
+        <span class="price">30 点</span>
+        <button>购买</button>
+      </div>
+      <div class="shop-item">
+        <span class="rarity-dot" style="background:#888"></span>
+        <span class="name" style="color:#aaa">翻转骰</span>
+        <span class="desc">翻转一颗骰子 (1-6,2-5,3-4)</span>
+        <span class="price">10 点</span>
+        <button>购买</button>
+      </div>
+      <div class="shop-item">
+        <span class="rarity-dot" style="background:#daa520"></span>
+        <span class="name" style="color:#daa520">算力超频</span>
+        <span class="desc">所有人增加一颗随机骰子</span>
+        <span class="price">50 点</span>
+        <button>购买</button>
+      </div>
+      <div class="shop-item">
+        <span class="rarity-dot" style="background:#5a9aca"></span>
+        <span class="name" style="color:#5a9aca">加骰</span>
+        <span class="desc">下一局永久增加2颗骰子</span>
+        <span class="price">30 点</span>
+        <button>购买</button>
+      </div>
+      <div class="shop-item">
+        <span class="rarity-dot" style="background:#888"></span>
+        <span class="name" style="color:#aaa">赌徒直觉</span>
+        <span class="desc">提示区显示全桌最多点数</span>
+        <span class="price">10 点</span>
+        <button>购买</button>
+      </div>
+      <div class="refresh-row">
+        <button class="refresh-btn">刷新 5 点</button>
+        <span style="font-size:10px;color:#555">每次刷新价格上涨</span>
+      </div>
+    </div>
+
+    <div class="right">
+      <div class="section-title">情报 (免费)</div>
+      <div class="info-box">
+        <div class="info-title">当前变质规则</div>
+        <div class="info-body">标准规则 — 无特殊限制</div>
+      </div>
+      <div class="info-box">
+        <div class="info-title">关卡进度</div>
+        <div class="info-body">破烂后院 · 3/5 节点</div>
+      </div>
+      <div class="info-box">
+        <div class="info-title">已击败 Boss</div>
+        <div class="info-body">暂无</div>
+      </div>
+      <div class="info-box">
+        <div class="info-title">下个对手提示</div>
+        <div class="info-body">普通: 电池小子 · 5骰 <br> Boss: 独眼龙老板娘 · 5骰+暗骰</div>
+      </div>
+      <button class="continue-btn">继续前进</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

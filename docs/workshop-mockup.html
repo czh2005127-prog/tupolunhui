@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>锈蚀工坊 - 卡册</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#08080c;color:#ccc;font-family:"PingFang SC","Microsoft YaHei",sans-serif;padding:20px}
+.album{max-width:1100px;margin:0 auto}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.header h1{color:#d4a84b;font-size:22px;font-weight:600}
+.pts{color:#b87a17;font-size:12px;border:1px solid #b87a17;padding:4px 14px;border-radius:20px}
+.filters{display:flex;gap:10px;margin-bottom:16px}
+.filters span{padding:4px 16px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid #2a2a2a}
+.filters .active{background:#1a2a3a;border-color:#3a6a9a;color:#5a9aca}
+.filters span:last-child{margin-left:auto;color:#555;border:none}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+.card{position:relative;border-radius:10px;overflow:hidden;cursor:pointer;transition:transform .15s,box-shadow .15s;aspect-ratio:2.5/3.5}
+.card:hover{transform:translateY(-2px);box-shadow:0 4px 20px rgba(0,0,0,.4)}
+.card-inner{position:absolute;inset:0;padding:12px;display:flex;flex-direction:column}
+.card-name{font-weight:600;font-size:13px;margin-bottom:2px}
+.card-rarity{font-size:9px;margin-bottom:8px}
+.card-portrait{flex:1;border-radius:6px;margin-bottom:8px;display:flex;align-items:center;justify-content:center;font-size:36px;font-weight:700}
+.card-skill{font-size:9px;line-height:1.4}
+.card-level{position:absolute;bottom:8px;right:8px;display:flex;gap:2px}
+.card-level span{width:5px;height:5px;border-radius:50%}
+.card.locked{opacity:.25;cursor:default}
+.card.locked:hover{transform:none;box-shadow:none}
+
+.c-common .card-inner{background:linear-gradient(135deg,#1c1612,#251a14)}
+.c-common .card-portrait{background:#2a1518;color:#b85a30}
+.c-common .card-name{color:#d88a50}
+.c-common .card-rarity{color:#6a4030}
+
+.c-rare .card-inner{background:linear-gradient(135deg,#121a24,#0f1a28)}
+.c-rare .card-portrait{background:#0d1f35;color:#4a8abf}
+.c-rare .card-name{color:#5a9aca}
+.c-rare .card-rarity{color:#2a5a7a}
+
+.c-epic .card-inner{background:linear-gradient(135deg,#181220,#1c1428)}
+.c-epic .card-portrait{background:#1a1030;color:#8060b0}
+.c-epic .card-name{color:#9060c0}
+.c-epic .card-rarity{color:#4a2a70}
+
+.c-legend .card-inner{background:linear-gradient(135deg,#1c180c,#221e10)}
+.c-legend .card-portrait{background:#2a1a08;color:#daa520}
+.c-legend .card-name{color:#e0b030}
+.c-legend .card-rarity{color:#806010}
+
+.c-genesis .card-inner{background:linear-gradient(135deg,#1a0e0e,#200c0c)}
+.c-genesis .card-portrait{background:#2a1010;color:#e04040}
+.c-genesis .card-name{color:#e85555}
+.c-genesis .card-rarity{color:#802020}
+
+.dot-on{background:#5a9aca}.dot-off{background:#2a2a2a}
+
+.detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;z-index:10;align-items:center;justify-content:center}
+.detail-overlay.show{display:flex}
+.detail-card{width:700px;background:#111118;border-radius:14px;overflow:hidden;display:flex}
+.detail-left{width:240px;padding:24px;display:flex;flex-direction:column;align-items:center}
+.detail-left .big-portrait{width:140px;height:196px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:56px;font-weight:700;margin-bottom:16px}
+.detail-left .big-name{font-weight:600;font-size:16px;margin-bottom:4px}
+.detail-left .big-rarity{font-size:11px}
+.detail-right{flex:1;padding:24px;display:flex;flex-direction:column}
+.detail-right .desc{font-size:12px;color:#999;margin-bottom:20px;line-height:1.6}
+.detail-right .path-title{font-size:11px;color:#666;margin-bottom:10px}
+.path-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid#1a1a1a;font-size:12px}
+.path-lv{color:#666;min-width:40px}
+.path-desc{color:#aaa}
+.path-lv.cur{color:#5a9aca}.path-desc.cur{color:#5a9aca;font-weight:600}
+.path-desc.next{color:#5a9aca}
+.detail-bottom{margin-top:auto;display:flex;align-items:center;gap:12px;padding-top:16px;border-top:1px solid#222}
+.detail-bottom .cost{color:#666;font-size:11px}
+.detail-bottom button{padding:8px 20px;border-radius:6px;border:1px solid #5a9aca;color:#5a9aca;background:transparent;cursor:pointer;font-size:13px;font-weight:600}
+.detail-bottom button:hover{background:rgba(90,154,202,.1)}
+.detail-bottom .avail{color:#555;font-size:11px;margin-left:auto}
+.detail-close{position:absolute;top:16px;right:20px;color:#555;cursor:pointer;font-size:18px}
+</style>
+</head>
+<body>
+<div class="album">
+  <div class="header">
+    <h1>锈蚀工坊</h1>
+    <span class="pts">12 锈蚀点</span>
+  </div>
+  <div class="filters">
+    <span class="active">全部</span>
+    <span>普通</span>
+    <span>稀有</span>
+    <span>史诗</span>
+    <span>传说</span>
+    <span style="margin-left:auto">已解锁 7 / 20</span>
+  </div>
+
+  <div class="grid">
+    <div class="card c-common" onclick="openDetail('jack')">
+      <div class="card-inner">
+        <div class="card-name">瘸腿老杰克</div>
+        <div class="card-rarity">普通 · CRT-7</div>
+        <div class="card-portrait">J</div>
+        <div class="card-skill">偷窥 — 随机看1骰</div>
+        <div class="card-level"><span class="dot-on"></span><span class="dot-on"></span><span class="dot-off"></span></div>
+      </div>
+    </div>
+
+    <div class="card c-common">
+      <div class="card-inner">
+        <div class="card-name">锈铁战士</div>
+        <div class="card-rarity">普通 · IRON-4</div>
+        <div class="card-portrait">R</div>
+        <div class="card-skill">意志依存 — 淘汰+1骰①</div>
+        <div class="card-level"><span class="dot-on"></span><span class="dot-off"></span><span class="dot-off"></span></div>
+      </div>
+    </div>
+
+    <div class="card c-common">
+      <div class="card-inner">
+        <div class="card-name">电池小子</div>
+        <div class="card-rarity">普通 · BATT-2</div>
+        <div class="card-portrait">B</div>
+        <div class="card-skill">备用电源 — 免死回血</div>
+        <div class="card-level"><span class="dot-off"></span><span class="dot-off"></span><span class="dot-off"></span></div>
+      </div>
+    </div>
+
+    <div class="card c-common">
+      <div class="card-inner">
+        <div class="card-name">信号噪音</div>
+        <div class="card-rarity">普通 · NOISE-1</div>
+        <div class="card-portrait">S</div>
+        <div class="card-skill">干扰 — 禁用1个道具</div>
+        <div class="card-level"><span class="dot-off"></span><span class="dot-off"></span><span class="dot-off"></span></div>
+      </div>
+    </div>
+
+    <div class="card c-rare">
+      <div class="card-inner">
+        <div class="card-name">独眼龙老板娘</div>
+        <div class="card-rarity">稀有 · LCD-9</div>
+        <div class="card-portrait">O</div>
+        <div class="card-skill">锁定 — 删除2个点数</div>
+        <div class="card-level"><span class="dot-on"></span><span class="dot-off"></span><span class="dot-off"></span></div>
+      </div>
+    </div>
+
+    <div class="card c-rare">
+      <div class="card-inner">
+        <div class="card-name">侍从长</div>
+        <div class="card-rarity">稀有 · SERV-5</div>
+        <div class="card-portrait">C</div>
+        <div class="card-skill">军械库 — 开局5道具</div>
+        <div class="card-level"><span class="dot-off"></span><span class="dot-off"></span><span class="dot-off"></span></div>
+      </div>
+    </div>
+
+    <div class="card c-common locked">
+      <div class="card-inner">
+        <div class="card-name">???</div>
+        <div class="card-rarity">击败以解锁</div>
+        <div class="card-portrait">?</div>
+        <div class="card-skill">—</div>
+        <div class="card-level"></div>
+      </div>
+    </div>
+
+    <div class="card c-rare locked">
+      <div class="card-inner">
+        <div class="card-name">???</div>
+        <div class="card-rarity">击败以解锁</div>
+        <div class="card-portrait">?</div>
+        <div class="card-skill">—</div>
+        <div class="card-level"></div>
+      </div>
+    </div>
+
+    <div class="card c-epic locked">
+      <div class="card-inner">
+        <div class="card-name">???</div>
+        <div class="card-rarity">击败以解锁</div>
+        <div class="card-portrait">?</div>
+        <div class="card-skill">—</div>
+        <div class="card-level"></div>
+      </div>
+    </div>
+
+    <div class="card c-legend locked">
+      <div class="card-inner">
+        <div class="card-name">???</div>
+        <div class="card-rarity">击败以解锁</div>
+        <div class="card-portrait">?</div>
+        <div class="card-skill">—</div>
+        <div class="card-level"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="detail-overlay" id="detail">
+  <div class="detail-card" style="position:relative">
+    <span class="detail-close" onclick="closeDetail()">✕</span>
+    <div class="detail-left">
+      <div class="big-portrait" style="background:#2a1518;color:#d85a30">J</div>
+      <div class="big-name" style="color:#d88a50">瘸腿老杰克</div>
+      <div class="big-rarity" style="color:#6a4030">普通 · CRT-7</div>
+      <div class="card-level" style="position:static;margin-top:12px;gap:4px">
+        <span class="dot-on" style="width:7px;height:7px"></span>
+        <span class="dot-on" style="width:7px;height:7px"></span>
+        <span class="dot-off" style="width:7px;height:7px"></span>
+      </div>
+    </div>
+    <div class="detail-right">
+      <div class="desc">每局可使用1次，随机偷看玩家手中1颗骰子的点数。<br>老东西几十年赌桌攒下的花招，越是破旧，越是狡猾。</div>
+      <div class="path-title">升阶路线</div>
+      <div class="path-row"><span class="path-lv">Lv.1</span><span class="path-desc">偷看 2 颗骰子</span></div>
+      <div class="path-row"><span class="path-lv cur">Lv.2 ←</span><span class="path-desc cur">偷看 2 颗 + 可使用 2 次</span></div>
+      <div class="path-row"><span class="path-lv">Lv.3</span><span class="path-desc next">偷看 3 颗 + 2 次 + 公开说出</span></div>
+      <div class="detail-bottom">
+        <span class="cost">费用 3 锈蚀点</span>
+        <button>升阶</button>
+        <span class="avail">持有 12 点</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function openDetail(id){ document.getElementById('detail').classList.add('show') }
+function closeDetail(){ document.getElementById('detail').classList.remove('show') }
+document.getElementById('detail').addEventListener('click',function(e){ if(e.target===this)closeDetail() })
+</script>
+</body>
+</html>
