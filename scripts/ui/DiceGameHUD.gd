@@ -61,6 +61,7 @@ var _tutorial_tween: Tween
 var _tutorial_history: Array[String] = []
 var _tutorial_review_panel: ColorRect
 var _tutorial_review_text: RichTextLabel
+var _tutorial_focus_nodes: Array[CanvasItem] = []
 var _hint_history: Array[String] = []
 var _history_index: int = 0
 var _last_reveal_text: String = ""  # 骰子揭示文本 (显示在继续按钮上方)
@@ -812,6 +813,8 @@ func setup_with_flow(stage: Resource, flow: Node, param3: Variant = null) -> voi
 	# Boss: show 3rd card
 	var is_boss_actual := card3 != null
 	if is_boss_actual:
+		if GameState.mark_tutorial_topic("boss_card"):
+			EventBus.tutorial_hint_show.emit("Boss战有三名对手：第三张卡是Boss主体，会同时拥有原技能和额外Boss技能。", 8.0)
 		if _opp_bg3: _opp_bg3.visible = true
 		if opponent_label3: opponent_label3.text = card3.card_name
 		if _sk_label3:
@@ -949,6 +952,9 @@ func _on_turn_changed(player: String) -> void:
 			status_label.text = "轮到你了"
 			if game_ctrl.get("_tutorial_active") and game_ctrl.current_bid_count > 0:
 				status_label.text = "对手叫牌已超过全桌骰子数，点击质疑"
+				_set_tutorial_focus("challenge")
+			elif game_ctrl.get("_tutorial_active"):
+				_set_tutorial_focus("bid")
 		if game_ctrl.current_bid_count > 0:
 			_bid_count = max(game_ctrl.current_bid_count + 1, _bid_count)
 		_refresh_adjust_labels()
@@ -1181,23 +1187,22 @@ func _on_game_over(winner: String) -> void:
 	else:
 		if status_label:
 			status_label.text = "你死机了... 蓝屏"
-		# 记录阵亡位置
-		GameState.final_stage_reached = GameState.current_stage
-		GameState.final_node_reached = GameState.current_node_index
-		GameState.commit_pending_xp()
-		GameState.delete_run_save()
-		GameState.save_progress()
 		_show_actions(false)
-		_show_death_screen()
+		if _is_boss_match and GameState.current_stage == 3 and game_ctrl and game_ctrl.get("_boss_card_id") == "dice_god" and GameState.royal_fragment_available:
+			_show_royal_fragment_retry()
+		else:
+			_finalize_run_death()
 
 func _resolve_prisoner_contract() -> void:
 	if GameState.current_contract.is_empty() or not game_ctrl:
 		return
 	var title: String = str(GameState.current_contract.get("title", "囚徒交易"))
 	if not game_ctrl.contract_was_completed():
+		GameState.prisoner_breaches += 1
 		var penalty_type: String = str(GameState.current_contract.get("penalty_type", ""))
 		var penalty: int = int(GameState.current_contract.get("penalty", 0))
 		if penalty_type == "gold":
+			penalty += int(GameState.current_contract.get("stage", GameState.current_stage)) * 5
 			var lost: int = mini(GameState.gold, penalty)
 			if lost > 0: GameState.spend_gold(lost)
 			EventBus.hint_show.emit("交易违约·%s：失去%d金币" % [title, lost], 4.0, Color(0.94, 0.4, 0.4))
@@ -1215,6 +1220,33 @@ func _resolve_prisoner_contract() -> void:
 		if not common_items.is_empty(): item_id = common_items[randi() % common_items.size()].item_id
 		GameState.add_consumable_item(item_id)
 		EventBus.hint_show.emit("交易完成·%s：获得普通道具" % title, 4.0, Color(0.75, 0.45, 0.85))
+
+func _finalize_run_death() -> void:
+	GameState.final_stage_reached = GameState.current_stage
+	GameState.final_node_reached = GameState.current_node_index
+	GameState.commit_pending_xp()
+	GameState.delete_run_save()
+	GameState.save_progress()
+	_show_death_screen()
+
+func _show_royal_fragment_retry() -> void:
+	var overlay := ColorRect.new()
+	overlay.name = "RoyalFragmentRetry"
+	overlay.position = Vector2.ZERO
+	overlay.size = Vector2(1280, 720)
+	overlay.color = Color(0.018, 0.012, 0.035, 0.98)
+	overlay.z_index = 500
+	add_child(overlay)
+	var title := Label.new(); title.text = "王权碎片正在崩裂"; title.position = Vector2(240, 120); title.size = Vector2(800, 60); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 31); title.add_theme_color_override("font_color", Color(0.98, 0.78, 0.29)); overlay.add_child(title)
+	var desc := Label.new(); desc.text = "被流放的国王替你挡住了完全同化。\n消耗王权碎片，可以将骰子之神战恢复到进入对局前并重新挑战一次。"; desc.position = Vector2(280, 225); desc.size = Vector2(720, 120); desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; desc.add_theme_font_size_override("font_size", 19); overlay.add_child(desc)
+	var retry := Button.new(); retry.text = "消耗碎片 · 重新挑战"; retry.position = Vector2(315, 420); retry.size = Vector2(300, 60); retry.pressed.connect(_retry_dice_god_with_royal_fragment); overlay.add_child(retry)
+	var give_up := Button.new(); give_up.text = "放弃重战"; give_up.position = Vector2(665, 420); give_up.size = Vector2(300, 60); give_up.pressed.connect(func(): overlay.queue_free(); _finalize_run_death()); overlay.add_child(give_up)
+
+func _retry_dice_god_with_royal_fragment() -> void:
+	if not GameState.consume_royal_fragment_retry():
+		_finalize_run_death()
+		return
+	get_tree().change_scene_to_file("res://scenes/gameflow/RunManager.tscn")
 
 func _show_death_screen() -> void:
 	var overlay: Control = Control.new()
@@ -2026,6 +2058,8 @@ func _on_boss_skill_effect(effect: String, detail: String) -> void:
 ## 显示卡牌技能触发的提示
 func _on_card_skill_triggered(card_id: String, skill_name: String, target: String) -> void:
 	if not _notify_label: return
+	if GameState.mark_tutorial_topic("enemy_skill"):
+		EventBus.tutorial_hint_show.emit("卡牌技能会改变基础规则。点击对手卡牌可以再次查看技能说明。", 7.0)
 	var card_display: String = card_id
 	match card_id:
 		"jack_crt": card_display = "瘸腿老杰克"
@@ -2059,10 +2093,33 @@ func _on_tutorial_hint_show(message: String, duration: float) -> void:
 	_tutorial_bar.modulate.a = 1.0
 	_tutorial_bar.visible = true
 	_tutorial_label.text = message
+	if message.begins_with("先看自己的骰子"):
+		_set_tutorial_focus("dice")
+	elif message.begins_with("很好"):
+		_set_tutorial_focus("observe")
+	elif message.begins_with("质疑成功"):
+		_set_tutorial_focus("")
 	_tutorial_tween = create_tween()
 	_tutorial_tween.tween_interval(duration)
 	_tutorial_tween.tween_property(_tutorial_bar, "modulate:a", 0.0, 0.35)
 	_tutorial_tween.tween_callback(func(): _tutorial_bar.visible = false)
+
+func _set_tutorial_focus(mode: String) -> void:
+	for node in _tutorial_focus_nodes:
+		if is_instance_valid(node): node.modulate = Color.WHITE
+	_tutorial_focus_nodes.clear()
+	match mode:
+		"dice":
+			for box in _die_boxes:
+				if box.visible: _tutorial_focus_nodes.append(box)
+		"bid":
+			_tutorial_focus_nodes.append_array([_btn_count_minus, _btn_count_plus, _btn_value_minus, _btn_value_plus, _btn_bid])
+		"challenge":
+			_tutorial_focus_nodes.append(_btn_challenge)
+		"observe":
+			pass
+	for node in _tutorial_focus_nodes:
+		if is_instance_valid(node): node.modulate = Color(1.0, 0.9, 0.48, 1.0)
 
 func _build_tutorial_review_panel() -> void:
 	_tutorial_review_panel = ColorRect.new()
@@ -2231,6 +2288,8 @@ func _on_half_assimilated() -> void:
 
 func _show_assimilation_choice() -> void:
 	if GameState.assimilation_count != 1 or not GameState.assimilation_curse.is_empty(): return
+	if GameState.mark_tutorial_topic("assimilation_choice"):
+		EventBus.tutorial_hint_show.emit("半同化不会立即结束本盘。选择一项带有代价的诅咒能力，它会持续到净化。", 8.0)
 	if find_child("AssimilationChoiceOverlay", false, false): return
 	var overlay := ColorRect.new()
 	overlay.name = "AssimilationChoiceOverlay"

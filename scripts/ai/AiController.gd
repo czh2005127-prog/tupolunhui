@@ -10,7 +10,6 @@ var virus_count: int = 0
 var _ai_id: String = ""    # "ai1", "ai2", "ai3"
 var _game: Node = null
 var _six_wild: bool = false  # 双面人: ①和⑥都是万能骰
-var _wild_disabled: bool = false
 var own_hidden_visible: bool = false
 
 func set_ai_id(id: String) -> void:
@@ -22,8 +21,8 @@ func set_dice_game(game: Node) -> void:
 func set_six_wild(val: bool) -> void:
 	_six_wild = val
 
-func set_wild_disabled(val: bool) -> void:
-	_wild_disabled = val
+func set_public_context(context: Dictionary) -> void:
+	_public_context = context.duplicate(true)
 
 var suspicion_of_player: float = 0.0
 var current_bid_count: int = 0
@@ -43,6 +42,7 @@ var bluff_frequency: float = 0.35
 var challenge_certainty: float = 0.4
 var _difficulty_stage: int = 0
 var _player_bid_results: Array[bool] = []
+var _public_context: Dictionary = {}
 
 func _init(card_data: Resource, dice_cup: RefCounted) -> void:
 	card = card_data
@@ -152,8 +152,6 @@ func _expected_total_for(value: int, own_values: Array) -> float:
 	return float(_count_for_target(value, own_values) + _count_for_target(value, known_values)) + unknown_count * _unknown_match_probability(value)
 
 func _unknown_match_probability(target: int) -> float:
-	if _wild_disabled:
-		return 1.0 / 6.0
 	if target == 1:
 		return 2.0 / 6.0 if _six_wild else 1.0 / 6.0
 	return 3.0 / 6.0 if _six_wild else 2.0 / 6.0
@@ -183,7 +181,7 @@ func _count_for_target(target: int, values: Array) -> int:
 	var c: int = 0
 	for v: int in values:
 		if v == target: c += 1
-		elif v == 1 and not _wild_disabled: c += 1
+		elif v == 1: c += 1
 		elif v == 6 and _six_wild: c += 1
 	return c
 
@@ -212,18 +210,43 @@ func _personality_bid_bonus(count: int, value: int, probability: float, is_raise
 		"dice_god":
 			if _game and value in [int(_game.get("forbidden_number")), int(_game.get("boss_forbidden_number"))]:
 				bonus -= 0.5
+	var active_cards: Array = _public_context.get("active_cards", [])
+	var player_fragments: Array = _public_context.get("player_fragments", [])
+	var used_items: Array = _public_context.get("player_items_used", [])
+	if "recycler" in active_cards:
+		bonus += 0.025 if probability >= 0.72 else -0.045
+	if "recycler" in player_fragments and probability < 0.62:
+		bonus -= 0.04
+	if "lucky_one" in player_fragments and value != 1:
+		bonus += 0.025
+	if "rig_dice" in used_items and value != 1:
+		bonus += 0.045
+	if bool(_public_context.get("own_shielded", false)) and is_raise:
+		bonus += 0.02
 	return bonus
 
 func _personality_challenge_adjustment() -> float:
 	if not card: return 0.0
+	var adjustment: float = 0.0
 	match card.card_id:
-		"jack_crt", "cyclops_lcd", "alliance_oled", "prophet": return 0.045
-		"referee": return 0.075
-		"rust_warrior", "battery_kid", "table_ghost": return 0.025
-		"recycler": return -0.055
-		"chamberlain", "unknown_abyss": return -0.035
-		"unknown_chaos": return randf_range(-0.06, 0.06)
-	return 0.0
+		"jack_crt", "cyclops_lcd", "alliance_oled", "prophet": adjustment += 0.045
+		"referee": adjustment += 0.075
+		"rust_warrior", "battery_kid", "table_ghost": adjustment += 0.025
+		"recycler": adjustment -= 0.055
+		"chamberlain", "unknown_abyss": adjustment -= 0.035
+		"unknown_chaos": adjustment += randf_range(-0.06, 0.06)
+	if bool(_public_context.get("last_bidder_shielded", false)):
+		adjustment -= 0.04
+	if "recycler" in _public_context.get("active_cards", []):
+		adjustment -= 0.025
+	if int(_public_context.get("player_dice_count", 5)) <= 2:
+		adjustment += 0.025
+	if "royal_pardon" in _public_context.get("player_items", []):
+		adjustment -= 0.015
+	if current_bid_count > 0 and bool(_public_context.get("last_bidder_is_player", false)):
+		var informed_player: bool = "alliance_oled" in _public_context.get("player_fragments", []) or "gambler_hunch" in _public_context.get("player_items_used", []) or "see_dark" in _public_context.get("player_items_used", []) or "heat_vision" in _public_context.get("player_items_used", [])
+		if informed_player: adjustment -= 0.03
+	return adjustment
 
 func _count_value(target: int, values: Array) -> int:
 	var c: int = 0

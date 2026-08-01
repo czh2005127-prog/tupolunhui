@@ -58,7 +58,6 @@ var _boss_card_id: String = ""
 var _boss_ai_id: String = ""
 var _boss_referee_shield_used: bool = false
 var _dice_god_phase: int = 0
-var _dice_god_final_rule: bool = false
 var _fragment_referee_used: bool = false
 var _fragment_ghost_used: bool = false
 
@@ -88,6 +87,7 @@ var _contract_start_items_used: int = 0
 var _contract_bold_bid: bool = false
 var _contract_five_twos: bool = false
 var _contract_bid_faces: Array[int] = []
+var _public_player_items_used: Array[String] = []
 var _tutorial_active: bool = false
 var _tutorial_forced_bids_remaining: int = 0
 var _tutorial_opening_done: bool = false
@@ -96,13 +96,17 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 	if GameState.current_battle_seed != 0:
 		seed(GameState.current_battle_seed)
 	_contract_start_items_used = GameState.items_used
+	_public_player_items_used.clear()
+	if not EventBus.item_used.is_connected(_on_public_player_item_used):
+		EventBus.item_used.connect(_on_public_player_item_used)
 	_tutorial_active = GameState.tutorial_enabled and not GameState.tutorial_completed and GameState.current_stage == 0
+	if has_dark_die and GameState.mark_tutorial_topic("dark_dice"):
+		EventBus.tutorial_hint_show.emit("暗骰不会向持有者显示点数，但仍参与开骰统计。", 7.0)
 	_bonus_dice = GameState.get_bonus_dice_count()
 	is_boss_mode = _is_boss
 	_boss_card_id = card3.card_id if is_boss_mode and card3 else ""
 	_boss_ai_id = "ai3" if not _boss_card_id.is_empty() else ""
 	_dice_god_phase = 1 if _boss_card_id == "dice_god" else 0
-	_dice_god_final_rule = false
 	var fragment_start_dice: int = 1 if GameState.has_boss_fragment("dealer") else 0
 	var base_player_dice: int = 4 if GameState.is_forbidden_rule_active("short_cup") else 5
 	var total: int = base_player_dice + _bonus_dice + fragment_start_dice
@@ -518,11 +522,12 @@ func _start_round() -> void:
 			if prop_lv >= 1:
 				cup.add_die()
 	_apply_boss_round_effects()
-	_update_dice_god_final_rule()
 	# Stage 3: one infectious face; a bid on it forces the next bid to keep that face.
 	if GameState.current_stage == 2:
 		infectious_number = randi() % 6 + 1
 		EventBus.hint_show.emit("传染骰点数: %d，叫到后下家必须跟叫该点数" % infectious_number, 4.0, Color(0.75, 0.45, 0.85))
+		if GameState.mark_tutorial_topic("infectious_face"):
+			EventBus.tutorial_hint_show.emit("传染点数被叫出后，下一名角色必须继续叫同一个点数。", 7.0)
 	else:
 		infectious_number = 0
 	# Stage 4 or the optional rule: one forbidden face.
@@ -539,20 +544,19 @@ func _start_round() -> void:
 			EventBus.hint_show.emit("双重禁忌: %d / %d，叫到任意点数扣1骰" % [forbidden_number, boss_forbidden_number], 4.0, Color(0.98, 0.35, 0.35))
 		else:
 			EventBus.hint_show.emit("禁忌点数: %d，叫到者立即扣1颗骰子" % forbidden_number, 4.0, Color(0.98, 0.35, 0.35))
+		if GameState.mark_tutorial_topic("forbidden_face"):
+			EventBus.tutorial_hint_show.emit("禁忌点数不能安全叫出：叫到者会立刻失去1颗骰子，归零则淘汰。", 8.0)
 	else:
 		forbidden_number = 0; boss_forbidden_number = 0
 	var tf_ai1: bool = ai1_virus < AI_MAX_VIRUS and card_has("ai1", "two_face")
 	var tf_ai2: bool = ai2_virus < AI_MAX_VIRUS and card_has("ai2", "two_face")
 	var tf_ai3: bool = ai3_virus < AI_MAX_VIRUS and card_has("ai3", "two_face")
-	_twoface_present = (tf_ai1 or tf_ai2 or tf_ai3) and not _dice_god_final_rule
+	_twoface_present = tf_ai1 or tf_ai2 or tf_ai3
 	ai_controller_1.set_six_wild(_twoface_present)
-	ai_controller_1.set_wild_disabled(_dice_god_final_rule)
 	if ai_controller_2:
 		ai_controller_2.set_six_wild(_twoface_present)
-		ai_controller_2.set_wild_disabled(_dice_god_final_rule)
 	if ai_controller_3:
 		ai_controller_3.set_six_wild(_twoface_present)
-		ai_controller_3.set_wild_disabled(_dice_god_final_rule)
 	# 独眼龙LCD: trigger once per battle, not once per round.
 	if not _get_card_ais("cyclops_lcd").is_empty() and _cyclops_locks.is_empty():
 		var cl_lv: int = GameState.get_card_level("cyclops_lcd")
@@ -664,18 +668,6 @@ func _infect_ai_immediately(ai_id: String) -> bool:
 		_apply_rust_warrior_skill(ai_id)
 	return eliminated
 
-func _update_dice_god_final_rule() -> void:
-	if _dice_god_final_rule or _boss_card_id != "dice_god" or _dice_god_phase < 2 or not _is_ai_alive(_boss_ai_id):
-		return
-	var god_cup: RefCounted = _get_ai_cup(_boss_ai_id)
-	if god_cup == null or god_cup.dice.size() > 1:
-		return
-	_dice_god_final_rule = true
-	for cup: RefCounted in [player_cup, ai_cup_1, ai_cup_2, ai_cup_3]:
-		if cup: cup.wild_disabled = true
-	EventBus.hint_show.emit("骰子之神·最终质疑：全场万能骰失效", 5.0, Color(0.98, 0.2, 0.2))
-	boss_skill_effect.emit("final_rule", "最终阶段：全场万能骰失效")
-
 func _try_advance_dice_god_phase(ai_id: String) -> bool:
 	if ai_id != _boss_ai_id or _boss_card_id != "dice_god" or _dice_god_phase != 1:
 		return false
@@ -684,11 +676,14 @@ func _try_advance_dice_god_phase(ai_id: String) -> bool:
 	if ctrl:
 		ctrl.is_eliminated = false
 		ctrl.virus_count = 0
-	if cup and cup.dice.size() > 1:
-		cup.dice.pop_back()
-		cup.dice_count -= 1
+	if cup:
+		while cup.dice.size() > 3:
+			cup.dice.pop_back()
+			cup.dice_count -= 1
+		while cup.dice.size() < 3:
+			cup.add_die()
 	_dice_god_phase = 2
-	EventBus.hint_show.emit("骰子之神粉碎一颗骰子，进入第二阶段：每轮出现两个禁忌点数", 5.0, Color(0.98, 0.2, 0.2))
+	EventBus.hint_show.emit("骰子之神粉碎并重组骰杯，以3颗骰子进入第二阶段：每轮出现两个禁忌点数", 5.0, Color(0.98, 0.2, 0.2))
 	boss_skill_effect.emit("phase", "第二阶段：双重禁忌")
 	return true
 
@@ -804,6 +799,34 @@ func _next_player() -> void:
 		if game_active: _ai_turn(current_player)
 
 ## AI turn
+func _on_public_player_item_used(item_id: String) -> void:
+	if item_id not in _public_player_items_used:
+		_public_player_items_used.append(item_id)
+	if item_id in ["reroll_stone", "full_reroll"]:
+		_public_player_items_used.erase("rig_dice")
+
+func _build_public_ai_context(ai_id: String) -> Dictionary:
+	var active_cards: Array[String] = []
+	for card_id in _card_ais:
+		if not _living_card_ais(str(card_id)).is_empty():
+			active_cards.append(str(card_id))
+	var last_bidder_shielded: bool = player_shield if last_bidder == "player" else bool(_ai_shields.get(last_bidder, false))
+	var own_ctrl: RefCounted = _get_ai_controller(ai_id)
+	var own_shielded: bool = bool(_ai_shields.get(ai_id, false))
+	if own_ctrl and own_ctrl.card and own_ctrl.card.card_id == "battery_kid" and own_ctrl.virus_count < mini(3, 1 + GameState.get_card_level("battery_kid")):
+		own_shielded = true
+	return {
+		"active_cards": active_cards,
+		"player_items": GameState.consumable_items.duplicate(),
+		"player_items_used": _public_player_items_used.duplicate(),
+		"player_fragments": GameState.boss_fragments.duplicate(),
+		"player_dice_count": player_cup.dice.size() if player_cup else 0,
+		"own_shielded": own_shielded,
+		"last_bidder_shielded": last_bidder_shielded,
+		"last_bidder_is_player": last_bidder == "player",
+		"forbidden_numbers": [forbidden_number, boss_forbidden_number],
+	}
+
 func _ai_turn(ai_id: String) -> void:
 	if not game_active: return
 	var ctrl = null; var cup = null
@@ -856,6 +879,7 @@ func _ai_turn(ai_id: String) -> void:
 			EventBus.hint_show.emit(msg, 3.0, Color(0.36, 0.5, 0.84))
 	ctrl.current_bid_count = current_bid_count
 	ctrl.current_bid_value = current_bid_value
+	ctrl.set_public_context(_build_public_ai_context(ai_id))
 	ctrl.total_other_dice = 0
 	if ai_id != "ai1" and ai1_virus < AI_MAX_VIRUS: ctrl.total_other_dice += ai_cup_1.dice.size()
 	if ai_id != "ai2" and ai2_virus < AI_MAX_VIRUS: ctrl.total_other_dice += ai_cup_2.dice.size()
@@ -917,14 +941,14 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 	var total_match: int = 0
 	var six_wild: bool = _twoface_present
 	if player_virus < PLAYER_MAX_VIRUS: total_match += player_cup.count_matches_revealing(target_value, six_wild)
-	if player_virus < PLAYER_MAX_VIRUS and GameState.assimilation_curse == "double_wild" and not _dice_god_final_rule and target_value not in [1, 3]:
+	if player_virus < PLAYER_MAX_VIRUS and GameState.assimilation_curse == "double_wild" and target_value not in [1, 3]:
 		for die in player_cup.dice:
 			if die.value == 3: total_match += 1
 	if ai1_virus < AI_MAX_VIRUS: total_match += ai_cup_1.count_matches_revealing(target_value, six_wild)
 	if ai2_virus < AI_MAX_VIRUS: total_match += ai_cup_2.count_matches_revealing(target_value, six_wild)
 	if ai3_virus < AI_MAX_VIRUS: total_match += ai_cup_3.count_matches_revealing(target_value, six_wild)
 	# 幸运儿 Lv.3: 他的①不能当万能
-	if target_value != 1 and not _dice_god_final_rule and GameState.get_card_level("lucky_one") >= 3:
+	if target_value != 1 and GameState.get_card_level("lucky_one") >= 3:
 		for lucky_id in _living_card_ais("lucky_one"):
 			var lucky_cup: RefCounted = _get_ai_cup(lucky_id)
 			if lucky_cup:

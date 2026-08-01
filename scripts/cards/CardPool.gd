@@ -24,10 +24,15 @@ static func _pick_from(pool: Array, count: int) -> Array:
 		return result
 	var occurrences: Dictionary = {}
 	while result.size() < count:
-		var candidates: Array = []
+		var unused_candidates: Array = []
+		var repeat_candidates: Array = []
 		for card in source:
-			if int(occurrences.get(card.card_id, 0)) < 2:
-				candidates.append(card)
+			var seen: int = int(occurrences.get(card.card_id, 0))
+			if seen == 0:
+				unused_candidates.append(card)
+			elif seen == 1:
+				repeat_candidates.append(card)
+		var candidates: Array = repeat_candidates if not repeat_candidates.is_empty() and (unused_candidates.is_empty() or randf() < 0.15) else unused_candidates
 		if candidates.is_empty(): break
 		var picked = candidates[randi() % candidates.size()]
 		result.append(picked)

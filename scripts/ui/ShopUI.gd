@@ -19,7 +19,16 @@ func set_parent_flow(f: Node) -> void:
 
 func _show_shop_tutorial() -> void:
 	var banner := Label.new(); banner.name = "TutorialBanner"; banner.text = "商店：金币购买一次性道具，最多携带3个。也可刷新货架，或尝试两次店内赌桌。"; banner.position = Vector2(250, 650); banner.size = Vector2(780, 38); banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; banner.add_theme_font_size_override("font_size", 15); banner.add_theme_color_override("font_color", Color(0.36, 0.79, 0.65)); add_child(banner)
-	var tween := create_tween(); tween.tween_interval(9.0); tween.tween_property(banner, "modulate:a", 0.0, 1.0); tween.tween_callback(banner.queue_free)
+	var highlighted: CanvasItem = null
+	for item in GameState.shop_items:
+		if item.price <= GameState.gold:
+			highlighted = find_child("Card_%s" % item.item_id, true, false) as CanvasItem
+			break
+	if highlighted: highlighted.modulate = Color(1.0, 0.88, 0.42, 1.0)
+	var tween := create_tween(); tween.tween_interval(9.0); tween.tween_property(banner, "modulate:a", 0.0, 1.0); tween.tween_callback(func():
+		if is_instance_valid(highlighted): highlighted.modulate = Color.WHITE
+		banner.queue_free()
+	)
 
 func _build() -> void:
 	for child in get_children():
@@ -439,7 +448,7 @@ func _open_gamble_table() -> void:
 	if _gamble_plays >= 2:
 		_show_warning("本商店的两次机会已经用完")
 		return
-	var cost: int = 5 if _gamble_plays == 0 else 10
+	var cost: int = 5 if _gamble_plays == 0 else 15
 	if GameState.gold < cost:
 		_show_warning("需要先投入%d金币" % cost)
 		return

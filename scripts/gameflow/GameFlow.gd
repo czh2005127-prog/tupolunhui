@@ -124,14 +124,18 @@ func _on_card_redraw_requested() -> void:
 func _on_cards_confirmed(cards: Array) -> void:
 	_drawn_cards = cards
 	_battle_reward_multiplier = GameState.get_battle_reward_multiplier(cards)
-	await _offer_prisoner_contract(cards)
+	if _is_boss_node and current_stage_index == 3:
+		await _show_prisoner_king_reveal()
+	else:
+		await _offer_prisoner_contract(cards)
 	GameState.capture_battle_entry(cards)
 	_actually_launch_battle()
 
 func _offer_prisoner_contract(cards: Array) -> void:
 	GameState.current_contract.clear()
-	if (_is_boss_node and current_stage_index == 3) or cards.is_empty() or randf() >= 0.35:
+	if cards.is_empty() or not GameState.prisoner_can_appear(current_stage_index):
 		return
+	GameState.record_prisoner_offer(current_stage_index)
 	var offers: Array[Dictionary] = [
 		{"id":"no_item", "title":"保持清醒", "desc":"本场不使用任何道具并获胜", "reward_type":"gold", "reward":25, "penalty_type":"gold", "penalty":10, "penalty_desc":"扣除10金币"},
 		{"id":"bold_bid", "title":"大胆开价", "desc":"至少一次合法叫到存活人数＋4以上并获胜", "reward_type":"item", "reward":"common_random", "penalty_type":"gold", "penalty":15, "penalty_desc":"扣除15金币"},
@@ -139,13 +143,41 @@ func _offer_prisoner_contract(cards: Array) -> void:
 		{"id":"three_faces", "title":"报遍三面", "desc":"整场合法叫过至少3种不同点数并获胜", "reward_type":"item", "reward":"common_random", "penalty_type":"gold", "penalty":10, "penalty_desc":"扣除10金币"},
 		{"id":"three_rounds", "title":"熬过三轮", "desc":"至少完成3轮质疑结算后再获胜", "reward_type":"gold", "reward":35, "penalty_type":"next_die", "penalty":1, "penalty_desc":"下一场战斗基础骰子−1"},
 	]
-	var contract: Dictionary = offers[randi() % offers.size()].duplicate(true)
-	contract["source"] = "无名囚徒"
+	offers.shuffle()
+	var contracts: Array[Dictionary] = [offers[0].duplicate(true), offers[1].duplicate(true)]
+	for contract in contracts:
+		contract["source"] = "无名囚徒"
+		contract["stage"] = current_stage_index
+		if contract.penalty_type == "gold":
+			contract["penalty_desc"] = "扣除%d金币" % (int(contract.penalty) + current_stage_index * 5)
 	var overlay := ColorRect.new(); overlay.position = Vector2.ZERO; overlay.size = Vector2(1280, 720); overlay.color = Color(0.015, 0.01, 0.025, 0.94); overlay.z_index = 450; add_child(overlay)
-	var title := Label.new(); title.text = "%s提出交易：%s" % [contract.source, contract.title]; title.position = Vector2(260, 155); title.size = Vector2(760, 50); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 25); overlay.add_child(title)
-	var desc := Label.new(); desc.text = "一张没有牌面的囚徒卡从桌底滑出。它不属于本场任何对手。\n\n%s\n奖励：%s　违约：%s" % [contract.desc, "%d金币" % contract.reward if contract.reward_type == "gold" else "1件普通道具", contract.penalty_desc]; desc.position = Vector2(270, 220); desc.size = Vector2(740, 145); desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; desc.add_theme_font_size_override("font_size", 17); overlay.add_child(desc)
-	var accept := Button.new(); accept.text = "接受交易"; accept.position = Vector2(390, 400); accept.size = Vector2(210, 52); accept.pressed.connect(func(): GameState.current_contract = contract.duplicate(true); overlay.queue_free(); contract_choice_resolved.emit()); overlay.add_child(accept)
-	var reject := Button.new(); reject.text = "拒绝"; reject.position = Vector2(680, 400); reject.size = Vector2(210, 52); reject.pressed.connect(func(): overlay.queue_free(); contract_choice_resolved.emit()); overlay.add_child(reject)
+	var title := Label.new(); title.text = "无名囚徒把两张契约推到你面前"; title.position = Vector2(240, 70); title.size = Vector2(800, 50); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 25); overlay.add_child(title)
+	var story_lines: Array[String] = ["‘先让我看看，你是不是另一个只会说大话的人。’", "‘你又来了。盒子正在听，但它还不知道你是谁。’", "‘越靠近王座，卡牌里哭喊的声音就越清楚。’", "‘门后就是篡位者。先证明你还能承担承诺。’"]
+	var story := Label.new(); story.text = story_lines[clampi(current_stage_index, 0, 3)]; story.position = Vector2(240, 125); story.size = Vector2(800, 34); story.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; story.add_theme_font_size_override("font_size", 15); overlay.add_child(story)
+	for i in range(2):
+		var contract: Dictionary = contracts[i]
+		var panel := ColorRect.new(); panel.position = Vector2(145 + i * 505, 190); panel.size = Vector2(485, 300); panel.color = Color(0.055, 0.035, 0.07, 0.98); overlay.add_child(panel)
+		var name_label := Label.new(); name_label.text = str(contract.title); name_label.position = Vector2(20, 18); name_label.size = Vector2(445, 38); name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; name_label.add_theme_font_size_override("font_size", 21); panel.add_child(name_label)
+		var desc := Label.new(); desc.text = "%s\n\n奖励：%s\n违约：%s" % [contract.desc, "%d金币" % contract.reward if contract.reward_type == "gold" else "1件普通道具", contract.penalty_desc]; desc.position = Vector2(28, 70); desc.size = Vector2(429, 135); desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; desc.add_theme_font_size_override("font_size", 15); panel.add_child(desc)
+		var accept := Button.new(); accept.text = "接受这份契约"; accept.position = Vector2(115, 225); accept.size = Vector2(255, 48); accept.pressed.connect(_accept_prisoner_contract.bind(contract, overlay)); panel.add_child(accept)
+	var reject := Button.new(); reject.text = "全部拒绝"; reject.position = Vector2(515, 535); reject.size = Vector2(250, 50); reject.pressed.connect(func(): overlay.queue_free(); contract_choice_resolved.emit()); overlay.add_child(reject)
+	await contract_choice_resolved
+
+func _accept_prisoner_contract(contract: Dictionary, overlay: Control) -> void:
+	GameState.current_contract = contract.duplicate(true)
+	GameState.record_prisoner_acceptance(current_stage_index)
+	overlay.queue_free()
+	contract_choice_resolved.emit()
+
+func _show_prisoner_king_reveal() -> void:
+	if GameState.prisoner_identity_revealed or not GameState.prisoner_king_arc_complete():
+		return
+	GameState.prisoner_identity_revealed = true
+	GameState.royal_fragment_available = true
+	var overlay := ColorRect.new(); overlay.position = Vector2.ZERO; overlay.size = Vector2(1280, 720); overlay.color = Color(0.012, 0.008, 0.022, 0.97); overlay.z_index = 470; add_child(overlay)
+	var title := Label.new(); title.text = "被流放的国王"; title.position = Vector2(240, 90); title.size = Vector2(800, 55); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 30); overlay.add_child(title)
+	var desc := Label.new(); desc.text = "无名囚徒终于翻开自己的卡面。\n\n‘我曾是这个国度的国王。骰子之神夺走王座，把我的子民压进卡牌，又把我流放到赌桌之外。’\n‘我一直在挑选一个守得住承诺的人。现在，把这块王权带到他面前。’\n\n获得独立碎片【王权碎片】\n若你在骰子之神战中完全同化，可消耗它重置并重战一次。"; desc.position = Vector2(250, 180); desc.size = Vector2(780, 300); desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; desc.add_theme_font_size_override("font_size", 18); overlay.add_child(desc)
+	var proceed := Button.new(); proceed.text = "接过王权碎片"; proceed.position = Vector2(490, 535); proceed.size = Vector2(300, 56); proceed.pressed.connect(func(): overlay.queue_free(); contract_choice_resolved.emit()); overlay.add_child(proceed)
 	await contract_choice_resolved
 
 func _actually_launch_battle() -> void:

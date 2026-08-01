@@ -47,6 +47,11 @@ var _battle_entry_snapshot: Dictionary = {}
 var current_battle_seed: int = 0
 var stage_node_orders: Dictionary = {}
 var current_contract: Dictionary = {}
+var prisoner_offer_stages: Array[int] = []
+var prisoner_accepted_stages: Array[int] = []
+var prisoner_breaches: int = 0
+var prisoner_identity_revealed: bool = false
+var royal_fragment_available: bool = false
 
 # ----- Rust Contract system -----
 # Card upgrade levels: { card_id: level (0-3) }
@@ -161,6 +166,7 @@ func get_gold_bonus() -> int:
 var tutorial_enabled: bool = true
 var tutorial_completed: bool = false
 var tutorial_shop_seen: bool = false
+var tutorial_seen_topics: Array[String] = []
 var selected_forbidden_rules: Array[String] = []
 var active_forbidden_rules: Array[String] = []
 
@@ -176,6 +182,31 @@ func set_bonus_dice(count: int) -> void:
 
 func adjust_bonus_dice(delta: int) -> void:
 	_temp_bonus_dice += delta
+
+func prisoner_can_appear(stage: int) -> bool:
+	if prisoner_breaches >= 3 or stage in prisoner_offer_stages:
+		return false
+	if stage <= 1:
+		return true
+	return 0 in prisoner_accepted_stages and 1 in prisoner_accepted_stages
+
+func record_prisoner_offer(stage: int) -> void:
+	if stage not in prisoner_offer_stages:
+		prisoner_offer_stages.append(stage)
+
+func record_prisoner_acceptance(stage: int) -> void:
+	if stage not in prisoner_accepted_stages:
+		prisoner_accepted_stages.append(stage)
+
+func prisoner_king_arc_complete() -> bool:
+	return prisoner_breaches < 3 and 0 in prisoner_accepted_stages and 1 in prisoner_accepted_stages
+
+func mark_tutorial_topic(topic_id: String) -> bool:
+	if not tutorial_enabled or topic_id in tutorial_seen_topics:
+		return false
+	tutorial_seen_topics.append(topic_id)
+	save_progress()
+	return true
 
 func add_gold(amount: int) -> void:
 	gold += amount
@@ -438,6 +469,11 @@ func setup_new_run() -> void:
 	current_battle_seed = 0
 	stage_node_orders.clear()
 	current_contract.clear()
+	prisoner_offer_stages.clear()
+	prisoner_accepted_stages.clear()
+	prisoner_breaches = 0
+	prisoner_identity_revealed = false
+	royal_fragment_available = false
 	active_forbidden_rules.clear()
 	if has_cleared_game:
 		active_forbidden_rules.assign(selected_forbidden_rules)
@@ -480,6 +516,11 @@ func capture_battle_entry(cards: Array) -> void:
 		"stage_node_orders": stage_node_orders.duplicate(true),
 		"current_contract": current_contract.duplicate(true),
 		"active_forbidden_rules": active_forbidden_rules.duplicate(),
+		"prisoner_offer_stages": prisoner_offer_stages.duplicate(),
+		"prisoner_accepted_stages": prisoner_accepted_stages.duplicate(),
+		"prisoner_breaches": prisoner_breaches,
+		"prisoner_identity_revealed": prisoner_identity_revealed,
+		"royal_fragment_available": royal_fragment_available,
 	}
 
 func clear_battle_entry() -> void:
@@ -516,12 +557,29 @@ func _restore_battle_entry(snapshot: Dictionary) -> void:
 	stage_node_orders = (snapshot.get("stage_node_orders", {}) as Dictionary).duplicate(true)
 	current_contract = (snapshot.get("current_contract", {}) as Dictionary).duplicate(true)
 	active_forbidden_rules.assign(snapshot.get("active_forbidden_rules", []))
+	prisoner_offer_stages.assign(snapshot.get("prisoner_offer_stages", []))
+	prisoner_accepted_stages.assign(snapshot.get("prisoner_accepted_stages", []))
+	prisoner_breaches = int(snapshot.get("prisoner_breaches", 0))
+	prisoner_identity_revealed = bool(snapshot.get("prisoner_identity_revealed", false))
+	royal_fragment_available = bool(snapshot.get("royal_fragment_available", false))
+
+func consume_royal_fragment_retry(persist: bool = true) -> bool:
+	if not royal_fragment_available or _battle_entry_snapshot.is_empty():
+		return false
+	var snapshot: Dictionary = _battle_entry_snapshot.duplicate(true)
+	_restore_battle_entry(snapshot)
+	royal_fragment_available = false
+	snapshot["royal_fragment_available"] = false
+	_battle_entry_snapshot = snapshot
+	if persist:
+		save_run()
+	return true
 
 func calculate_score() -> Dictionary:
 	var boss_bonus: int = bosses_defeated.size() * 100
 	var gold_bonus: int = gold / 4
 	var assimilation_penalty: int = total_assimilations * 50
-	var event_bonus: int = events_completed * 25
+	var event_bonus: int = events_completed * 12
 	var total: int = boss_bonus + gold_bonus - assimilation_penalty + event_bonus
 	var tier: String = "C"
 	if total >= 480: tier = "S"
@@ -549,6 +607,11 @@ func save_run(_dice_game_virus: int = 0, temporarily_disabled_items: Array = [],
 			"stage_node_orders": stage_node_orders.duplicate(true),
 			"current_contract": current_contract.duplicate(true),
 			"active_forbidden_rules": active_forbidden_rules.duplicate(),
+			"prisoner_offer_stages": prisoner_offer_stages.duplicate(),
+			"prisoner_accepted_stages": prisoner_accepted_stages.duplicate(),
+			"prisoner_breaches": prisoner_breaches,
+			"prisoner_identity_revealed": prisoner_identity_revealed,
+			"royal_fragment_available": royal_fragment_available,
 		}
 	var f := FileAccess.open("user://save_game.dat", FileAccess.WRITE)
 	if not f:
@@ -665,6 +728,9 @@ func save_progress() -> void:
 	for rule_id in selected_forbidden_rules:
 		f.store_pascal_string(rule_id)
 	f.store_32(1 if tutorial_shop_seen else 0)
+	f.store_32(tutorial_seen_topics.size())
+	for topic_id in tutorial_seen_topics:
+		f.store_pascal_string(topic_id)
 	f.close()
 
 func load_progress() -> void:
@@ -709,6 +775,11 @@ func load_progress() -> void:
 		for _i in range(forbidden_count):
 			if f.get_position() < f.get_length(): selected_forbidden_rules.append(f.get_pascal_string())
 	if f.get_position() < f.get_length(): tutorial_shop_seen = f.get_32() == 1
+	tutorial_seen_topics.clear()
+	if f.get_position() < f.get_length():
+		var topic_count: int = f.get_32()
+		for _i in range(topic_count):
+			if f.get_position() < f.get_length(): tutorial_seen_topics.append(f.get_pascal_string())
 	f.close()
 	var upgrade_data_migrated: bool = _migrate_three_level_upgrades()
 	# Rebuild all level-based unlocks so older saves with an empty card list migrate safely.

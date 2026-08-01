@@ -29,5 +29,5 @@ static func get_fragment_desc(card_id: String) -> String:
 
 static func get_boss_skill_name(card_id: String) -> String:
 	if card_id == "dice_god":
-		return "三段终局"
+		return "双命禁忌"
 	return str(DEFINITIONS.get(card_id, {}).get("boss_name", "Boss强化"))

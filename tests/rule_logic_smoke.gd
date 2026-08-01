@@ -22,6 +22,9 @@ func _ready() -> void:
 	_test_three_stage_curve()
 	_test_upgrade_migration()
 	_test_battle_entry_snapshot()
+	_test_prisoner_king_arc()
+	_test_duplicate_card_weight()
+	_test_event_score_weight()
 	_test_random_stage_nodes()
 	_test_forbidden_rewards_and_payout()
 	_test_prisoner_contract_objectives()
@@ -130,6 +133,69 @@ func _test_battle_entry_snapshot() -> void:
 	GameState.assimilation_count = 0
 	GameState.consumable_items.clear()
 	GameState.boss_fragments.clear()
+
+func _test_prisoner_king_arc() -> void:
+	GameState.prisoner_offer_stages.clear()
+	GameState.prisoner_accepted_stages.clear()
+	GameState.prisoner_breaches = 0
+	GameState.prisoner_identity_revealed = false
+	GameState.royal_fragment_available = false
+	assert(GameState.prisoner_can_appear(0) and GameState.prisoner_can_appear(1))
+	GameState.record_prisoner_offer(0)
+	GameState.record_prisoner_acceptance(0)
+	assert(not GameState.prisoner_can_appear(2), "前两层没有全部接受时，囚徒不得进入后两层")
+	GameState.record_prisoner_offer(1)
+	GameState.record_prisoner_acceptance(1)
+	assert(GameState.prisoner_can_appear(2) and GameState.prisoner_king_arc_complete())
+	GameState.prisoner_breaches = 3
+	assert(not GameState.prisoner_can_appear(2) and not GameState.prisoner_king_arc_complete(), "违约三次后囚徒必须离开本盘")
+	GameState.prisoner_breaches = 0
+	GameState.gold = 41
+	GameState.royal_fragment_available = true
+	var jack = CardDataScript.get_card_by_id("jack_crt")
+	var warrior = CardDataScript.get_card_by_id("rust_warrior")
+	GameState.capture_battle_entry([jack, warrior])
+	GameState.gold = 0
+	assert(GameState.consume_royal_fragment_retry(false), "王权碎片应恢复骰子之神战斗入口状态")
+	assert(GameState.gold == 41 and not GameState.royal_fragment_available)
+	assert(not GameState.consume_royal_fragment_retry(false), "王权碎片只能使用一次")
+	GameState.clear_battle_entry()
+	GameState.prisoner_offer_stages.clear()
+	GameState.prisoner_accepted_stages.clear()
+	GameState.prisoner_breaches = 0
+	GameState.prisoner_identity_revealed = false
+
+func _test_duplicate_card_weight() -> void:
+	var old_unlocks: Array[String] = GameState.unlocked_cards.duplicate()
+	GameState.unlocked_cards.assign(["jack_crt", "rust_warrior", "battery_kid"])
+	seed(20260801)
+	var duplicate_draws: int = 0
+	var common_pool: Array = CardDataScript.get_common_pool()
+	const SAMPLE_COUNT: int = 2000
+	for _i in range(SAMPLE_COUNT):
+		var draw: Array = CardPoolScript._pick_from(common_pool, 3)
+		var ids: Array = draw.map(func(card): return card.card_id)
+		if ids.size() == 3 and (ids[0] == ids[1] or ids[0] == ids[2] or ids[1] == ids[2]):
+			duplicate_draws += 1
+	var rate: float = float(duplicate_draws) / SAMPLE_COUNT
+	assert(rate > 0.08 and rate < 0.40, "重复牌应保留小概率，但不能成为常态")
+	GameState.unlocked_cards.assign(old_unlocks)
+
+func _test_event_score_weight() -> void:
+	var old_events: int = GameState.events_completed
+	var old_bosses: Array[String] = GameState.bosses_defeated.duplicate()
+	var old_gold: int = GameState.gold
+	var old_assimilations: int = GameState.total_assimilations
+	GameState.events_completed = 3
+	GameState.bosses_defeated.clear()
+	GameState.gold = 0
+	GameState.total_assimilations = 0
+	var result: Dictionary = GameState.calculate_score()
+	assert(result.event_bonus == 36 and result.score == 36, "事件分数应降低为每次12分")
+	GameState.events_completed = old_events
+	GameState.bosses_defeated.assign(old_bosses)
+	GameState.gold = old_gold
+	GameState.total_assimilations = old_assimilations
 
 func _test_random_stage_nodes() -> void:
 	GameState.stage_node_orders.clear()
@@ -264,6 +330,8 @@ func _test_duplicate_dealers() -> void:
 	GameState.current_stage = 0
 	GameState.assimilation_count = 0
 	game.start_game(dealers[0], dealers[0], false, null, false)
+	var public_context: Dictionary = game._build_public_ai_context("ai1")
+	assert(not public_context.has("player_dice_values") and not public_context.has("current_contract"), "AI公开上下文不得泄露玩家暗骰或囚徒契约")
 	assert(game.ai_cup_1.dice.size() == 8, "第一名庄家应以8骰开局")
 	assert(game.ai_cup_2.dice.size() == 8, "重复庄家也应以8骰开局")
 	assert(game.current_player in ["ai1", "ai2"], "双庄家应随机由其中一名起叫")
@@ -313,12 +381,9 @@ func _test_dice_god_phases() -> void:
 	assert(game._dice_god_phase == 1)
 	assert(game.ai_controller_3.infect())
 	assert(game._try_advance_dice_god_phase("ai3"), "骰子之神首次应被淘汰时应进入第二阶段")
-	assert(game._dice_god_phase == 2 and game.ai3_virus == 0)
-	while game.ai_cup_3.dice.size() > 1:
-		game.ai_cup_3.dice.pop_back()
-		game.ai_cup_3.dice_count -= 1
-	game._update_dice_god_final_rule()
-	assert(game._dice_god_final_rule and game.player_cup.wild_disabled, "骰神仅剩一骰时全场万能骰应失效")
+	assert(game._dice_god_phase == 2 and game.ai3_virus == 0 and game.ai_cup_3.dice.size() == 3)
+	assert(game.ai_controller_3.infect(), "骰子之神第二条命耗尽时应被淘汰")
+	assert(not game._try_advance_dice_god_phase("ai3"), "骰子之神不得出现第三阶段")
 	await get_tree().create_timer(4.0).timeout
 	for ctrl in [game.ai_controller_1, game.ai_controller_2, game.ai_controller_3]:
 		if ctrl: ctrl.set_dice_game(null)
