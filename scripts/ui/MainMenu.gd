@@ -77,6 +77,12 @@ func _build() -> void:
 		var cd: Dictionary = cards[i]
 		var cx: int = card_start_x + i * (CARD_W + CARD_GAP)
 		_build_card(cx, card_y, cd)
+	if GameState.has_cleared_game:
+		var forbidden := Button.new()
+		forbidden.text = "禁忌规则 · 已启用%d条" % GameState.selected_forbidden_rules.size()
+		forbidden.position = Vector2(500, card_y + CARD_H + 28); forbidden.size = Vector2(280, 42)
+		forbidden.pressed.connect(_open_forbidden_rules)
+		add_child(forbidden)
 
 func _build_card(x: float, y: float, data: Dictionary) -> void:
 	var enabled: bool = data.get("enabled", true)
@@ -191,3 +197,23 @@ func _on_rust_workshop() -> void:
 
 func _on_settings() -> void:
 	get_tree().change_scene_to_file("res://scenes/ui/Settings.tscn")
+
+func _open_forbidden_rules() -> void:
+	var layer := CanvasLayer.new(); layer.layer = 100; add_child(layer)
+	var dim := ColorRect.new(); dim.color = Color(0, 0, 0, 0.88); dim.position = Vector2.ZERO; dim.size = Vector2(CANVAS_W, CANVAS_H); layer.add_child(dim)
+	var panel := ColorRect.new(); panel.position = Vector2(260, 105); panel.size = Vector2(760, 510); panel.color = Color(0.04, 0.035, 0.065); layer.add_child(panel)
+	var title := _label("禁忌规则", Vector2(0, 22), 28, COL_GOLD); title.size = Vector2(760, 45); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; panel.add_child(title)
+	var definitions: Array[Dictionary] = [
+		{"id":"forbidden_spread", "name":"禁忌蔓延", "desc":"所有层出现禁忌点数 · 金币/XP +20%"},
+		{"id":"high_pressure", "name":"高压开盘", "desc":"最低起叫额外+1 · 金币/XP +15%"},
+		{"id":"short_cup", "name":"缺口骰杯", "desc":"玩家基础骰子减为4颗 · 金币/XP +25%"},
+	]
+	for i in range(definitions.size()):
+		var definition: Dictionary = definitions[i]
+		var check := CheckButton.new(); check.text = "%s　%s" % [definition.name, definition.desc]; check.position = Vector2(95, 105 + i * 92); check.size = Vector2(570, 58); check.button_pressed = definition.id in GameState.selected_forbidden_rules
+		check.toggled.connect(func(enabled: bool, rule_id: String = definition.id):
+			if enabled and rule_id not in GameState.selected_forbidden_rules: GameState.selected_forbidden_rules.append(rule_id)
+			elif not enabled: GameState.selected_forbidden_rules.erase(rule_id)
+			GameState.save_progress())
+		panel.add_child(check)
+	var close := Button.new(); close.text = "确认"; close.position = Vector2(280, 425); close.size = Vector2(200, 44); close.pressed.connect(func(): layer.queue_free(); _build()); panel.add_child(close)

@@ -18,8 +18,9 @@ var _mixed_picks: Array = []    # save phase1 picks during boss flow
 var _pick_count: int = 2
 
 var _stage: int = 0
+var _can_redraw: bool = true
 
-func setup(pool: Array, boss_pool: Array, flow: Node, is_boss: bool, pick_count: int = 2, stage: int = 0) -> void:
+func setup(pool: Array, boss_pool: Array, flow: Node, is_boss: bool, pick_count: int = 2, stage: int = 0, can_redraw: bool = true) -> void:
 	pool.shuffle()
 	_pool = pool
 	_boss_pool = boss_pool
@@ -27,6 +28,7 @@ func setup(pool: Array, boss_pool: Array, flow: Node, is_boss: bool, pick_count:
 	_is_boss = is_boss
 	_pick_count = pick_count
 	_stage = stage
+	_can_redraw = can_redraw
 	_selected.clear()
 	_card_rects.clear()
 	_boss_card_panels.clear()
@@ -328,7 +330,28 @@ func _check_all_flipped() -> void:
 	sb.add_theme_font_size_override("font_size", 16)
 	sb.pressed.connect(_on_start)
 	bg.add_child(sb)
+	if _is_boss and not _mixed_picks.is_empty():
+		var mixed_names: Array[String] = []
+		for mixed_card in _mixed_picks: mixed_names.append(mixed_card.card_name)
+		var summary := _lbl("已选混合对手：%s" % "、".join(mixed_names), Vector2(300, 510), Vector2(680, 26), Color(0.72, 0.72, 0.78), 13)
+		summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		bg.add_child(summary)
+	if _can_redraw:
+		var redraw := Button.new()
+		redraw.name = "RedrawBtn"
+		redraw.text = "不满意 · 免费重抽整组（仅一次）"
+		redraw.position = Vector2(490, 545)
+		redraw.size = Vector2(300, 38)
+		redraw.pressed.connect(_on_redraw)
+		bg.add_child(redraw)
 	_phase = "revealed"
+
+func _on_redraw() -> void:
+	if not _can_redraw: return
+	_can_redraw = false
+	queue_free()
+	if _flow_parent and _flow_parent.has_method("_on_card_redraw_requested"):
+		_flow_parent._on_card_redraw_requested()
 
 func _on_start() -> void:
 	var final: Array

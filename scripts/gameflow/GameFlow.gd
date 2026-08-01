@@ -1,10 +1,11 @@
 ## Manages the full game run — stages, nodes, scene transitions.
-## V2: Linear progression, no map, shop after every regular battle.
+## Linear five-node progression: two battles, one shop, one event, then boss.
 extends Control
 
 signal fragment_choice_resolved
+signal contract_choice_resolved
 
-enum NodeType { DICE, EVENT, BOSS }
+enum NodeType { DICE, EVENT, SHOP, BOSS }
 const CardPoolRef = preload("res://scripts/cards/CardPool.gd")
 const BossFragmentDataRef = preload("res://scripts/resources/BossFragmentData.gd")
 
@@ -17,6 +18,7 @@ var _drawn_cards: Array = []
 var _is_boss_node: bool = false
 var _battle_gold: int = 0
 var _battle_reward_multiplier: float = 1.0
+var _redraw_used: bool = false
 
 func _ready() -> void:
 	_build_stages()
@@ -61,12 +63,19 @@ func _on_enter() -> void:
 
 func _generate_nodes() -> void:
 	nodes_this_stage.clear()
-	match current_stage_index:
-		0: nodes_this_stage.append_array([NodeType.DICE, NodeType.DICE, NodeType.BOSS])
-		1: nodes_this_stage.append_array([NodeType.DICE, NodeType.DICE, NodeType.EVENT, NodeType.BOSS])
-		2: nodes_this_stage.append_array([NodeType.DICE, NodeType.DICE, NodeType.DICE, NodeType.BOSS])
-		3: nodes_this_stage.append_array([NodeType.DICE, NodeType.DICE, NodeType.DICE, NodeType.DICE, NodeType.BOSS])
-		_: nodes_this_stage.append(NodeType.BOSS)
+	var key: String = str(current_stage_index)
+	if GameState.stage_node_orders.has(key):
+		nodes_this_stage.assign(GameState.stage_node_orders[key])
+		return
+	var prefix: Array = [NodeType.DICE, NodeType.DICE, NodeType.SHOP, NodeType.EVENT]
+	while true:
+		prefix.shuffle()
+		var shop_index: int = prefix.find(NodeType.SHOP)
+		var first_battle_index: int = prefix.find(NodeType.DICE)
+		if first_battle_index >= 0 and first_battle_index < shop_index:
+			break
+	nodes_this_stage = prefix + [NodeType.BOSS]
+	GameState.stage_node_orders[key] = nodes_this_stage.duplicate()
 
 func _run_node(node_type: int) -> void:
 	for child: Node in get_children():
@@ -76,6 +85,7 @@ func _run_node(node_type: int) -> void:
 	match node_type:
 		NodeType.DICE, NodeType.BOSS: _launch_battle(node_type == NodeType.BOSS)
 		NodeType.EVENT: _launch_event()
+		NodeType.SHOP: _launch_shop()
 
 func _launch_battle(is_boss: bool) -> void:
 	_is_boss_node = is_boss
@@ -99,14 +109,38 @@ func _launch_battle(is_boss: bool) -> void:
 	var card_ui := preload("res://scripts/ui/CardDrawUI.gd").new()
 	card_ui.name = "CardDrawUI"
 	add_child(card_ui)
-	card_ui.setup(mixed_pool, boss_pool, self, is_boss, 2, current_stage_index)
+	card_ui.setup(mixed_pool, boss_pool, self, is_boss, 2, current_stage_index, not _redraw_used)
+
+func _on_card_redraw_requested() -> void:
+	if _redraw_used: return
+	_redraw_used = true
+	_launch_battle(_is_boss_node)
 
 ## Called by CardDrawUI when player confirms selected cards
 func _on_cards_confirmed(cards: Array) -> void:
 	_drawn_cards = cards
 	_battle_reward_multiplier = GameState.get_battle_reward_multiplier(cards)
+	await _offer_prisoner_contract(cards)
 	GameState.capture_battle_entry(cards)
 	_actually_launch_battle()
+
+func _offer_prisoner_contract(cards: Array) -> void:
+	GameState.current_contract.clear()
+	if (_is_boss_node and current_stage_index == 3) or cards.is_empty() or randf() >= 0.35:
+		return
+	var offers: Array[Dictionary] = [
+		{"id":"no_item", "title":"保持清醒", "desc":"本场不使用任何道具并获胜", "reward_type":"gold", "reward":20},
+		{"id":"bold_bid", "title":"大胆开价", "desc":"至少一次合法叫到存活人数＋4以上并获胜", "reward_type":"item", "reward":"common_random"},
+		{"id":"true_challenge", "title":"揭穿谎言", "desc":"玩家主动质疑成功至少一次并获胜", "reward_type":"gold", "reward":15},
+	]
+	var contract: Dictionary = offers[randi() % offers.size()].duplicate(true)
+	contract["source"] = cards[randi() % cards.size()].card_name
+	var overlay := ColorRect.new(); overlay.position = Vector2.ZERO; overlay.size = Vector2(1280, 720); overlay.color = Color(0.015, 0.01, 0.025, 0.94); overlay.z_index = 450; add_child(overlay)
+	var title := Label.new(); title.text = "%s 提出交易：%s" % [contract.source, contract.title]; title.position = Vector2(260, 180); title.size = Vector2(760, 50); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 25); overlay.add_child(title)
+	var desc := Label.new(); desc.text = "%s\n奖励：%s" % [contract.desc, "%d金币" % contract.reward if contract.reward_type == "gold" else "1件普通道具"]; desc.position = Vector2(300, 250); desc.size = Vector2(680, 100); desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; desc.add_theme_font_size_override("font_size", 17); overlay.add_child(desc)
+	var accept := Button.new(); accept.text = "接受交易"; accept.position = Vector2(390, 400); accept.size = Vector2(210, 52); accept.pressed.connect(func(): GameState.current_contract = contract.duplicate(true); overlay.queue_free(); contract_choice_resolved.emit()); overlay.add_child(accept)
+	var reject := Button.new(); reject.text = "拒绝"; reject.position = Vector2(680, 400); reject.size = Vector2(210, 52); reject.pressed.connect(func(): overlay.queue_free(); contract_choice_resolved.emit()); overlay.add_child(reject)
+	await contract_choice_resolved
 
 func _actually_launch_battle() -> void:
 	var is_boss: bool = _is_boss_node
@@ -141,40 +175,37 @@ func _launch_event() -> void:
 
 func _on_node_completed(_type: String) -> void:
 	GameState.clear_battle_entry()
-	var was_elite: bool = false
+	_redraw_used = false
+	var unknown_count: int = 0
 	for card in _drawn_cards:
 		if card and card.rarity == CardData.Rarity.UNKNOWN:
-			was_elite = true
-			break
-	# If this was a regular battle, launch shop automatically
+			unknown_count += 1
+	var unknown_gold_multiplier: float = 1.25 if unknown_count >= 2 else 1.0
+	# Regular battle rewards; the independently generated shop node handles shopping.
 	if not _is_boss_node and nodes_this_stage[current_node_index] == NodeType.DICE:
-		GameState.add_gold(maxi(_battle_gold, floori(_battle_gold * _battle_reward_multiplier)))
-		if was_elite:
-			if not GameState.add_consumable_item(CardPoolRef.get_elite_item()):
+		GameState.add_gold(maxi(_battle_gold, floori(_battle_gold * _battle_reward_multiplier * unknown_gold_multiplier)))
+		if unknown_count > 0:
+			var elite_reward: String = CardPoolRef.get_rare_item() if unknown_count >= 2 else CardPoolRef.get_elite_item()
+			if not GameState.add_consumable_item(elite_reward):
 				await EventBus.discard_resolved
-			GameState.add_rust_points(2)
+			GameState.add_rust_points(4 if unknown_count >= 2 else 2)
 			GameState.save_progress()
-			current_node_index += 1
-			GameState.current_node_index = current_node_index
-			await _show_corridor()
-			_run_node(nodes_this_stage[current_node_index])
-			return
-		_launch_shop()
+		await _advance_node()
 		return
 
 	# Boss: give legendary item
 	if _is_boss_node:
-		GameState.add_gold(maxi(_battle_gold, floori(_battle_gold * _battle_reward_multiplier)))
+		GameState.add_gold(maxi(_battle_gold, floori(_battle_gold * _battle_reward_multiplier * unknown_gold_multiplier)))
 		var leg_item: String = CardPoolRef.get_legendary_item()
 		if not GameState.add_consumable_item(leg_item):
 			await EventBus.discard_resolved
 		EventBus.hint_show.emit("获得传说道具: " + GameState.get_item_info(leg_item).item_name, 3.0, Color(0.98, 0.78, 0.29))
-		if was_elite:
-			var elite_item: String = CardPoolRef.get_elite_item()
+		if unknown_count > 0:
+			var elite_item: String = CardPoolRef.get_rare_item() if unknown_count >= 2 else CardPoolRef.get_elite_item()
 			if not GameState.add_consumable_item(elite_item):
 				await EventBus.discard_resolved
-			GameState.add_rust_points(2)
-			EventBus.hint_show.emit("未知精英追加奖励: 稀有判定道具 + 2锈蚀点", 3.0, Color(0.75, 0.45, 0.85))
+			GameState.add_rust_points(4 if unknown_count >= 2 else 2)
+			EventBus.hint_show.emit("未知精英追加奖励：%s + %d锈蚀点" % ["保底稀有道具" if unknown_count >= 2 else "精英道具", 4 if unknown_count >= 2 else 2], 3.0, Color(0.75, 0.45, 0.85))
 		# Record boss defeat
 		GameState.bosses_defeated.append(str(current_stage_index))
 		# Award rust points
@@ -190,8 +221,11 @@ func _on_node_completed(_type: String) -> void:
 			var boss_card = _drawn_cards.back()
 			if boss_card and BossFragmentDataRef.has_definition(boss_card.card_id):
 				await _award_boss_fragment(boss_card.card_id)
+		await _advance_node()
+		return
+	await _advance_node()
 
-	# Advance
+func _advance_node() -> void:
 	current_node_index += 1
 	GameState.current_node_index = current_node_index
 	if current_node_index >= nodes_this_stage.size():
@@ -204,17 +238,7 @@ func _on_node_completed(_type: String) -> void:
 		_run_node(nodes_this_stage[current_node_index])
 
 func _on_shop_exited() -> void:
-	# After shop, advance to next node
-	current_node_index += 1
-	GameState.current_node_index = current_node_index
-	if current_node_index >= nodes_this_stage.size():
-		current_stage_index += 1
-		current_node_index = 0
-		await _show_corridor()
-		_on_enter()
-	else:
-		await _show_corridor()
-		_run_node(nodes_this_stage[current_node_index])
+	await _advance_node()
 
 func _award_boss_fragment(card_id: String) -> void:
 	var result: String = GameState.add_boss_fragment(card_id)

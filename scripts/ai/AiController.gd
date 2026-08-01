@@ -37,14 +37,17 @@ var _bk_saved: bool = false  # 电池小子 Lv.3 triggered
 # Card-derived behavior params
 var bluff_frequency: float = 0.35
 var challenge_certainty: float = 0.4
+var _difficulty_stage: int = 0
+var _player_bid_results: Array[bool] = []
 
 func _init(card_data: Resource, dice_cup: RefCounted) -> void:
 	card = card_data
 	ai_name = card_data.card_name
 	cup = dice_cup
 	var r: int = card_data.rarity
-	bluff_frequency = 0.3 + r * 0.05 + randf() * 0.1
-	challenge_certainty = 0.3 + r * 0.05 + randf() * 0.1
+	_difficulty_stage = clampi(GameState.current_stage, 0, 3)
+	bluff_frequency = 0.26 + r * 0.035 + _difficulty_stage * 0.025
+	challenge_certainty = 0.28 + r * 0.04 + _difficulty_stage * 0.04
 
 func decide_action() -> String:
 	if current_bid_count == 0:
@@ -90,7 +93,9 @@ func _make_evidence_bid(my_values: Array) -> Dictionary:
 		var support: float = _expected_total_for(value, my_values)
 		var supported_count: int = mini(current_bid_count + 3, floori(support))
 		if supported_count > current_bid_count + 1 and _bid_is_legal(supported_count, value):
-			if estimate_bid_truth_probability(supported_count, value, my_values) >= 0.72:
+			var jump_threshold: float = 0.78 - _difficulty_stage * 0.02
+			if card and card.card_id in ["dealer", "lucky_one"]: jump_threshold -= 0.04
+			if estimate_bid_truth_probability(supported_count, value, my_values) >= jump_threshold:
 				candidates.append({"count": supported_count, "value": value})
 	if candidates.is_empty():
 		return {"count": current_bid_count + 1, "value": 2}
@@ -100,6 +105,10 @@ func _make_evidence_bid(my_values: Array) -> Dictionary:
 		var probability: float = estimate_bid_truth_probability(candidate.count, candidate.value, my_values)
 		var jump_penalty: float = maxf(0.0, float(candidate.count - current_bid_count - 1)) * 0.12
 		var score: float = probability - jump_penalty + randf_range(-0.025, 0.025)
+		if card:
+			if card.card_id == "lucky_one" and int(candidate.value) == 1: score += 0.08
+			if card.card_id in ["dealer", "casino_owner"] and int(candidate.count) > current_bid_count: score += 0.035
+			if card.card_id == "unknown_chaos": score += randf_range(-0.10, 0.10)
 		if score > best_score:
 			best_score = score; best = candidate
 	_just_bluffed = estimate_bid_truth_probability(best.count, best.value, my_values) < 0.42
@@ -110,13 +119,17 @@ func _evaluate_challenge() -> bool:
 	var own_values: Array = cup.get_all_values() if own_hidden_visible else cup.get_values()
 	var truth_probability: float = estimate_bid_truth_probability(current_bid_count, current_bid_value, own_values)
 	var rarity: int = int(card.rarity) if card else 0
-	var challenge_line: float = clampf(0.28 + rarity * 0.045 + suspicion_of_player * 0.12, 0.25, 0.62)
+	var challenge_line: float = clampf(0.25 + rarity * 0.04 + _difficulty_stage * 0.045 + suspicion_of_player * 0.14, 0.22, 0.68)
+	if card and card.card_id in ["jack_crt", "cyclops_lcd", "alliance_oled"] and not player_full_values.is_empty(): challenge_line += 0.05
+	if card and card.card_id in ["battery_kid", "table_ghost"]: challenge_line += 0.035
+	if cup and cup.dice.size() <= 1: challenge_line += 0.04
 	# Small noise prevents identical cards from becoming perfectly readable while
 	# preserving evidence as the dominant factor.
-	return truth_probability < challenge_line + randf_range(-0.035, 0.035)
+	var noise: float = [0.085, 0.055, 0.03, 0.012][_difficulty_stage]
+	return truth_probability < challenge_line + randf_range(-noise, noise)
 
 func estimate_bid_truth_probability(bid_count: int, bid_value: int, own_values: Array) -> float:
-	var known_values: Array = player_full_values.duplicate()
+	var known_values: Array = player_full_values.duplicate() if _difficulty_stage >= 1 else []
 	if known_values.is_empty() and card and card.card_id == "jack_crt" and _peeked_player_value > 0:
 		known_values.append(_peeked_player_value)
 	var certain_matches: int = _count_for_target(bid_value, own_values) + _count_for_target(bid_value, known_values)
@@ -131,7 +144,7 @@ func estimate_bid_truth_probability(bid_count: int, bid_value: int, own_values: 
 	return clampf(result, 0.0, 1.0)
 
 func _expected_total_for(value: int, own_values: Array) -> float:
-	var known_values: Array = player_full_values
+	var known_values: Array = player_full_values if _difficulty_stage >= 1 else []
 	var unknown_count: int = maxi(0, total_other_dice - known_values.size())
 	return float(_count_for_target(value, own_values) + _count_for_target(value, known_values)) + unknown_count * _unknown_match_probability(value)
 
@@ -151,6 +164,15 @@ func _bid_is_legal(count: int, value: int) -> bool:
 		return bool(_game._is_valid_bid(count, value))
 	if current_bid_count == 0: return count >= min_opening
 	return count > current_bid_count or (count == current_bid_count and value > current_bid_value)
+
+func observe_player_bid(was_true: bool) -> void:
+	if _difficulty_stage < 2: return
+	_player_bid_results.append(was_true)
+	while _player_bid_results.size() > 5: _player_bid_results.pop_front()
+	var false_count: int = 0
+	for result in _player_bid_results:
+		if not result: false_count += 1
+	suspicion_of_player = float(false_count) / float(maxi(1, _player_bid_results.size()))
 
 func _count_for_target(target: int, values: Array) -> int:
 	var c: int = 0

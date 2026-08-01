@@ -72,11 +72,11 @@ func _build() -> void:
     var on_btn: ColorRect = ColorRect.new()
     on_btn.position = Vector2(580, y)
     on_btn.size = Vector2(80, 30)
-    on_btn.color = Color(0.04, 0.2, 0.08)
+    on_btn.color = Color(0.04, 0.2, 0.08) if GameState.tutorial_enabled else Color(0.2, 0.06, 0.06)
     _add_btn_border(on_btn, 80, 30, Color(0.36, 0.79, 0.65, 0.8))
     add_child(on_btn)
     var on_lbl: Label = Label.new()
-    on_lbl.text = "开"
+    on_lbl.text = "开" if GameState.tutorial_enabled else "关"
     on_lbl.position = Vector2(0, 0)
     on_lbl.size = Vector2(80, 30)
     on_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -84,6 +84,13 @@ func _build() -> void:
     on_lbl.add_theme_font_size_override("font_size", 14)
     on_lbl.add_theme_color_override("font_color", Color(0.36, 0.79, 0.65))
     on_btn.add_child(on_lbl)
+    on_btn.mouse_filter = Control.MOUSE_FILTER_STOP
+    on_btn.gui_input.connect(func(e: InputEvent):
+        if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+            GameState.tutorial_enabled = not GameState.tutorial_enabled
+            on_lbl.text = "开" if GameState.tutorial_enabled else "关"
+            on_btn.color = Color(0.04, 0.2, 0.08) if GameState.tutorial_enabled else Color(0.2, 0.06, 0.06)
+            GameState.save_progress())
 
     y += 50
 

@@ -44,6 +44,9 @@ var next_boss_dice_penalty: int = 0
 var next_boss_start_assimilated: bool = false
 var saved_battle_card_ids: Array[String] = []
 var _battle_entry_snapshot: Dictionary = {}
+var current_battle_seed: int = 0
+var stage_node_orders: Dictionary = {}
+var current_contract: Dictionary = {}
 
 # ----- Rust Contract system -----
 # Card upgrade levels: { card_id: level (0-3) }
@@ -156,6 +159,10 @@ func get_gold_bonus() -> int:
 
 # ----- Tutorial -----
 var tutorial_enabled: bool = true
+var tutorial_completed: bool = false
+var tutorial_shop_seen: bool = false
+var selected_forbidden_rules: Array[String] = []
+var active_forbidden_rules: Array[String] = []
 
 const MAX_CONSUMABLE: int = 3
 
@@ -256,7 +263,18 @@ func get_battle_reward_multiplier(cards: Array) -> float:
 		var level: int = clampi(get_card_level(card.card_id), 0, 3)
 		bonus_sum += LEVEL_MULTIPLIERS[level] - 1.0
 		counted += 1
-	return 1.0 + (bonus_sum / float(counted)) if counted > 0 else 1.0
+	var card_multiplier: float = 1.0 + (bonus_sum / float(counted)) if counted > 0 else 1.0
+	return card_multiplier * get_forbidden_reward_multiplier()
+
+func get_forbidden_reward_multiplier() -> float:
+	var bonus: float = 0.0
+	if "forbidden_spread" in active_forbidden_rules: bonus += 0.20
+	if "high_pressure" in active_forbidden_rules: bonus += 0.15
+	if "short_cup" in active_forbidden_rules: bonus += 0.25
+	return 1.0 + bonus
+
+func is_forbidden_rule_active(rule_id: String) -> bool:
+	return rule_id in active_forbidden_rules
 
 func add_consumable_item(item_id: String) -> bool:
 	if consumable_items.size() < MAX_CONSUMABLE:
@@ -414,11 +432,17 @@ func setup_new_run() -> void:
 	next_boss_start_assimilated = false
 	saved_battle_card_ids.clear()
 	_battle_entry_snapshot.clear()
+	current_battle_seed = 0
+	stage_node_orders.clear()
+	current_contract.clear()
+	active_forbidden_rules = selected_forbidden_rules.duplicate() if has_cleared_game else []
 	_clear_save()
 
 ## Freeze the run at the moment after opponents are chosen but before battle setup
 ## consumes one-shot modifiers. Pausing during the battle always returns here.
 func capture_battle_entry(cards: Array) -> void:
+	if current_battle_seed == 0:
+		current_battle_seed = randi_range(1, 2147483646)
 	saved_battle_card_ids.clear()
 	for card in cards:
 		if card != null:
@@ -447,11 +471,17 @@ func capture_battle_entry(cards: Array) -> void:
 		"run_xp": _run_xp,
 		"pending_xp": _pending_xp,
 		"card_ids": saved_battle_card_ids.duplicate(),
+		"battle_seed": current_battle_seed,
+		"stage_node_orders": stage_node_orders.duplicate(true),
+		"current_contract": current_contract.duplicate(true),
+		"active_forbidden_rules": active_forbidden_rules.duplicate(),
 	}
 
 func clear_battle_entry() -> void:
 	_battle_entry_snapshot.clear()
 	saved_battle_card_ids.clear()
+	current_battle_seed = 0
+	current_contract.clear()
 
 func _restore_battle_entry(snapshot: Dictionary) -> void:
 	gold = int(snapshot.get("gold", gold))
@@ -477,6 +507,10 @@ func _restore_battle_entry(snapshot: Dictionary) -> void:
 	_run_xp = int(snapshot.get("run_xp", _run_xp))
 	_pending_xp = int(snapshot.get("pending_xp", _pending_xp))
 	saved_battle_card_ids.assign(snapshot.get("card_ids", []))
+	current_battle_seed = int(snapshot.get("battle_seed", 0))
+	stage_node_orders = (snapshot.get("stage_node_orders", {}) as Dictionary).duplicate(true)
+	current_contract = (snapshot.get("current_contract", {}) as Dictionary).duplicate(true)
+	active_forbidden_rules.assign(snapshot.get("active_forbidden_rules", []))
 
 func calculate_score() -> Dictionary:
 	var boss_bonus: int = bosses_defeated.size() * 100
@@ -506,6 +540,10 @@ func save_run(_dice_game_virus: int = 0, temporarily_disabled_items: Array = [],
 			"next_boss_dice_penalty": maxi(next_boss_dice_penalty, int(restart_modifiers.get("boss_dice_penalty", 0))),
 			"next_boss_start_assimilated": next_boss_start_assimilated,
 			"card_ids": saved_battle_card_ids.duplicate(),
+			"battle_seed": current_battle_seed,
+			"stage_node_orders": stage_node_orders.duplicate(true),
+			"current_contract": current_contract.duplicate(true),
+			"active_forbidden_rules": active_forbidden_rules.duplicate(),
 		}
 	var f := FileAccess.open("user://save_game.dat", FileAccess.WRITE)
 	if not f:
@@ -542,6 +580,10 @@ func has_saved_game() -> bool:
 func load_run() -> bool:
 	var f := FileAccess.open("user://save_game.dat", FileAccess.READ)
 	if not f: return false
+	_battle_entry_snapshot.clear()
+	saved_battle_card_ids.clear()
+	current_battle_seed = 0
+	current_contract.clear()
 	gold = f.get_32()
 	assimilation_count = f.get_32()
 	current_stage = f.get_32()
@@ -613,6 +655,11 @@ func save_progress() -> void:
 	for cid in purchased_card_levels:
 		f.store_pascal_string(cid)
 		f.store_32(purchased_card_levels[cid])
+	f.store_32(1 if tutorial_completed else 0)
+	f.store_32(selected_forbidden_rules.size())
+	for rule_id in selected_forbidden_rules:
+		f.store_pascal_string(rule_id)
+	f.store_32(1 if tutorial_shop_seen else 0)
 	f.close()
 
 func load_progress() -> void:
@@ -649,6 +696,14 @@ func load_progress() -> void:
 			purchased_card_levels[f.get_pascal_string()] = f.get_32()
 	else:
 		purchased_card_levels = card_levels.duplicate()
+	if f.get_position() < f.get_length():
+		tutorial_completed = f.get_32() == 1
+	selected_forbidden_rules.clear()
+	if f.get_position() < f.get_length():
+		var forbidden_count: int = f.get_32()
+		for _i in range(forbidden_count):
+			if f.get_position() < f.get_length(): selected_forbidden_rules.append(f.get_pascal_string())
+	if f.get_position() < f.get_length(): tutorial_shop_seen = f.get_32() == 1
 	f.close()
 	var upgrade_data_migrated: bool = _migrate_three_level_upgrades()
 	# Rebuild all level-based unlocks so older saves with an empty card list migrate safely.

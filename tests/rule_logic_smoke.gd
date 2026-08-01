@@ -5,14 +5,22 @@ const CardDataScript := preload("res://scripts/resources/CardData.gd")
 const DiceCupScript := preload("res://scripts/dice/DiceCup.gd")
 const DiceGameScript := preload("res://scripts/dice/DiceGame.gd")
 const BossFragmentDataScript := preload("res://scripts/resources/BossFragmentData.gd")
+const GameFlowScript := preload("res://scripts/gameflow/GameFlow.gd")
+const ShopUIScript := preload("res://scripts/ui/ShopUI.gd")
+const MainMenuScript := preload("res://scripts/ui/MainMenu.gd")
+const CardDrawUIScript := preload("res://scripts/ui/CardDrawUI.gd")
 
 func _ready() -> void:
+	GameState.tutorial_completed = true
 	_test_dynamic_candidates()
 	_test_pair_fix()
 	_test_fragment_inventory()
 	_test_three_stage_curve()
 	_test_upgrade_migration()
 	_test_battle_entry_snapshot()
+	_test_random_stage_nodes()
+	_test_forbidden_rewards_and_payout()
+	_test_shop_build()
 	_test_ai_probability_logic()
 	_test_growth_curse()
 	await _test_duplicate_dealers()
@@ -26,10 +34,14 @@ func _test_dynamic_candidates() -> void:
 	GameState.unlocked_cards.clear()
 	GameState.unlocked_cards.append_array(["jack_crt", "rust_warrior", "battery_kid"])
 	var initial_pool: Array = CardPoolScript.get_mixed_pool(0)
-	assert(initial_pool.size() == 3, "初始候选应为三张")
+	assert(initial_pool.size() == 5, "混合候选必须固定五张")
+	var initial_unknowns: int = initial_pool.filter(func(card): return card.rarity == CardDataScript.Rarity.UNKNOWN).size()
+	assert(initial_unknowns == 2, "五张候选必须包含两张不同未知卡")
+	var unknown_ids: Array = initial_pool.filter(func(card): return card.rarity == CardDataScript.Rarity.UNKNOWN).map(func(card): return card.card_id)
+	assert(unknown_ids[0] != unknown_ids[1], "未知候选不得重复")
 	GameState.unlocked_cards.append("signal_noise")
 	var expanded_pool: Array = CardPoolScript.get_mixed_pool(0)
-	assert(expanded_pool.size() == 4, "第四张同稀有度卡解锁后候选应增长")
+	assert(expanded_pool.size() == 5, "解锁增长后仍固定五张候选")
 	GameState.unlocked_cards.append_array(["recycler", "lucky_one", "table_ghost", "mirror_tech", "referee"])
 	var maximum_pool: Array = CardPoolScript.get_mixed_pool(2)
 	assert(maximum_pool.size() == 5, "候选数量上限应为五张")
@@ -90,6 +102,8 @@ func _test_battle_entry_snapshot() -> void:
 	GameState.consumable_items.assign(["payout", "full_reroll"])
 	GameState.boss_fragments.assign(["lucky_one"])
 	GameState.capture_battle_entry([jack, warrior])
+	var captured_seed: int = GameState.current_battle_seed
+	assert(captured_seed != 0, "战斗入口必须保存确定性随机种子")
 	GameState.gold = 999
 	GameState.assimilation_count = 2
 	GameState.consumable_items.clear()
@@ -99,10 +113,48 @@ func _test_battle_entry_snapshot() -> void:
 	assert(GameState.consumable_items == ["payout", "full_reroll"])
 	assert(GameState.boss_fragments == ["lucky_one"])
 	assert(GameState.saved_battle_card_ids == ["jack_crt", "rust_warrior"])
+	assert(GameState.current_battle_seed == captured_seed)
 	GameState.clear_battle_entry()
 	GameState.assimilation_count = 0
 	GameState.consumable_items.clear()
 	GameState.boss_fragments.clear()
+
+func _test_random_stage_nodes() -> void:
+	GameState.stage_node_orders.clear()
+	var flow = GameFlowScript.new()
+	flow.current_stage_index = 0
+	flow._generate_nodes()
+	assert(flow.nodes_this_stage.size() == 5)
+	assert(flow.nodes_this_stage.back() == GameFlowScript.NodeType.BOSS)
+	assert(flow.nodes_this_stage.count(GameFlowScript.NodeType.DICE) == 2)
+	assert(flow.nodes_this_stage.count(GameFlowScript.NodeType.SHOP) == 1)
+	assert(flow.nodes_this_stage.count(GameFlowScript.NodeType.EVENT) == 1)
+	assert(flow.nodes_this_stage.find(GameFlowScript.NodeType.DICE) < flow.nodes_this_stage.find(GameFlowScript.NodeType.SHOP), "商店前必须至少有一场战斗")
+	flow.free()
+
+func _test_forbidden_rewards_and_payout() -> void:
+	var old_rules: Array[String] = GameState.active_forbidden_rules.duplicate()
+	GameState.active_forbidden_rules.assign(["high_pressure"])
+	var jack = CardDataScript.get_card_by_id("jack_crt")
+	GameState.card_levels["jack_crt"] = 0
+	assert(is_equal_approx(GameState.get_battle_reward_multiplier([jack]), 1.15))
+	var game = DiceGameScript.new()
+	game.queue_payout_reward(15); game.queue_payout_reward(15)
+	assert(game.claim_payout_reward() == 30, "多张清算必须在胜利时叠加结算")
+	assert(game.claim_payout_reward() == 0, "清算奖励只能领取一次")
+	game.free()
+	GameState.active_forbidden_rules = old_rules
+
+func _test_shop_build() -> void:
+	var old_seen: bool = GameState.tutorial_shop_seen
+	GameState.tutorial_shop_seen = true
+	var shop = ShopUIScript.new()
+	add_child(shop)
+	shop.set_parent_flow(self)
+	assert(shop.find_child("GambleBtn", true, false) != null, "商店必须提供最多两次的店内赌桌入口")
+	remove_child(shop)
+	shop.free()
+	GameState.tutorial_shop_seen = old_seen
 
 func _test_ai_probability_logic() -> void:
 	var ai_script := preload("res://scripts/ai/AiController.gd")
@@ -123,8 +175,8 @@ func _test_growth_curse() -> void:
 	game.player_cup.dice[0].value = 1
 	game.player_cup.dice[1].value = 4
 	GameState.assimilation_curse = "growth_cost"
-	game._apply_player_round_effects()
-	assert(game.player_cup.dice.size() == 3)
+	for _i in range(6): game._apply_player_round_effects()
+	assert(game.player_cup.dice.size() == 5, "增殖代价每场最多增加3颗骰子")
 	assert(game.player_cup.get_all_values().count(1) <= 1, "增殖代价每轮应随机改变一颗①")
 	GameState.assimilation_curse = ""
 	game.free()

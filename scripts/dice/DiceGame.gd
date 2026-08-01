@@ -80,14 +80,27 @@ var _fate_active: bool = false
 var _fate_index: int = 0
 var _fate_value: int = 0
 var _fate_rounds_left: int = 0
+var _pending_payout_gold: int = 0
+var _growth_dice_added: int = 0
+var _contract_start_items_used: int = 0
+var _contract_bold_bid: bool = false
+var _contract_challenge_success: bool = false
+var _tutorial_active: bool = false
+var _tutorial_forced_bids_remaining: int = 0
+var _tutorial_opening_done: bool = false
 
 func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, card3: Resource = null, _is_boss: bool = false) -> void:
+	if GameState.current_battle_seed != 0:
+		seed(GameState.current_battle_seed)
+	_contract_start_items_used = GameState.items_used
+	_tutorial_active = GameState.tutorial_enabled and not GameState.tutorial_completed and GameState.current_stage == 0
 	_bonus_dice = GameState.get_bonus_dice_count()
 	is_boss_mode = _is_boss
 	_boss_card_id = card3.card_id if is_boss_mode and card3 else ""
 	_boss_ai_id = "ai3" if not _boss_card_id.is_empty() else ""
 	var fragment_start_dice: int = 1 if GameState.has_boss_fragment("dealer") else 0
-	var total: int = 5 + _bonus_dice + fragment_start_dice
+	var base_player_dice: int = 4 if GameState.is_forbidden_rule_active("short_cup") else 5
+	var total: int = base_player_dice + _bonus_dice + fragment_start_dice
 	player_cup = preload("res://scripts/dice/DiceCup.gd").new(total)
 	ai_cup_1 = preload("res://scripts/dice/DiceCup.gd").new(5)
 	ai_cup_2 = preload("res://scripts/dice/DiceCup.gd").new(5)
@@ -316,7 +329,9 @@ func _copy_player_dice_to_mirror() -> void:
 
 func _apply_player_round_effects() -> void:
 	if GameState.assimilation_curse == "growth_cost":
-		player_cup.add_die()
+		if _growth_dice_added < 3:
+			player_cup.add_die()
+			_growth_dice_added += 1
 		var one_indices: Array[int] = []
 		for i in range(player_cup.dice.size()):
 			if player_cup.dice[i].value == 1: one_indices.append(i)
@@ -504,8 +519,8 @@ func _start_round() -> void:
 		EventBus.hint_show.emit("传染骰点数: %d，叫到后下家必须跟叫该点数" % infectious_number, 4.0, Color(0.75, 0.45, 0.85))
 	else:
 		infectious_number = 0
-	# Stage 4: one forbidden face. Dice God changes it every round; otherwise it stays for the battle.
-	if GameState.current_stage == 3:
+	# Stage 4 or the optional rule: one forbidden face.
+	if GameState.current_stage == 3 or GameState.is_forbidden_rule_active("forbidden_spread"):
 		if forbidden_number == 0 or not _living_card_ais("dice_god").is_empty():
 			var previous_forbidden: int = forbidden_number
 			while forbidden_number == 0 or forbidden_number == previous_forbidden:
@@ -590,6 +605,9 @@ func _start_round() -> void:
 	var living_dealers: Array[String] = _living_card_ais("dealer")
 	if not living_dealers.is_empty():
 		starter = living_dealers[randi() % living_dealers.size()]
+	if _tutorial_active and round_number == 1:
+		starter = "player"
+		EventBus.hint_show.emit("先看自己的骰子：①可以代替其他点数。然后从存活人数＋1开始叫牌。", 8.0, Color(0.36, 0.79, 0.65))
 	current_player = starter
 
 	turn_changed.emit(current_player)
@@ -636,7 +654,7 @@ func _infect_ai_immediately(ai_id: String) -> bool:
 	return eliminated
 
 func _apply_forbidden_penalty(bidder: String) -> bool:
-	if GameState.current_stage != 3 or current_bid_value not in [forbidden_number, boss_forbidden_number]:
+	if (GameState.current_stage != 3 and not GameState.is_forbidden_rule_active("forbidden_spread")) or current_bid_value not in [forbidden_number, boss_forbidden_number]:
 		return false
 	var cup: RefCounted = player_cup if bidder == "player" else _get_ai_cup(bidder)
 	if cup and cup.dice.size() > 0:
@@ -701,6 +719,13 @@ func player_bid(count: int, value: int) -> bool:
 	if not game_active or current_player != "player": return false
 	if GameState.assimilation_curse == "double_wild" and value in [1, 3]: return false
 	if not _is_valid_bid(count, value): return false
+	if _tutorial_active and not _tutorial_opening_done:
+		_tutorial_opening_done = true
+		_tutorial_forced_bids_remaining = _living_ai_count()
+		EventBus.hint_show.emit("很好。后续必须增加数量，或数量相同时提高点数。留意明显超过全桌骰子数的叫牌。", 7.0, Color(0.36, 0.79, 0.65))
+	var alive_at_bid: int = _living_ai_count() + (1 if player_virus < PLAYER_MAX_VIRUS else 0)
+	if count >= alive_at_bid + 4:
+		_contract_bold_bid = true
 	current_bid_count = count; current_bid_value = value; last_bidder = "player"
 	bid_updated.emit(count, value, "你")
 	if _apply_forbidden_penalty("player"): return true
@@ -794,6 +819,8 @@ func _ai_turn(ai_id: String) -> void:
 	if ai_id != "ai3" and ai3_virus < AI_MAX_VIRUS: ctrl.total_other_dice += ai_cup_3.dice.size()
 	if ai_id != "player": ctrl.total_other_dice += player_cup.dice.size()
 	var action: String = ctrl.decide_action()
+	if _tutorial_active and _tutorial_forced_bids_remaining > 0:
+		action = "tutorial_false_bid"
 	if int(_skip_ai_turns.get(ai_id, 0)) > 0:
 		_skip_ai_turns[ai_id] = int(_skip_ai_turns[ai_id]) - 1
 		EventBus.hint_show.emit("%s 的静默回合生效" % get_ai_name_for_id(ai_id), 2.0, Color(0.52, 0.72, 0.92))
@@ -803,11 +830,20 @@ func _ai_turn(ai_id: String) -> void:
 		action = "bid"
 	if action == "challenge":
 		_resolve_challenge(ai_id, last_bidder); return
-	elif action == "bid":
-		var bid: Dictionary = _sanitize_ai_bid(ctrl.make_bid())
+	elif action in ["bid", "tutorial_false_bid"]:
+		var bid: Dictionary
+		if action == "tutorial_false_bid":
+			var total_dice_now: int = player_cup.dice.size()
+			if ai1_virus < AI_MAX_VIRUS: total_dice_now += ai_cup_1.dice.size()
+			if ai2_virus < AI_MAX_VIRUS: total_dice_now += ai_cup_2.dice.size()
+			if ai3_virus < AI_MAX_VIRUS: total_dice_now += ai_cup_3.dice.size()
+			bid = _sanitize_ai_bid({"count": maxi(current_bid_count + 1, total_dice_now + 1), "value": 2})
+			_tutorial_forced_bids_remaining -= 1
+		else:
+			bid = _sanitize_ai_bid(ctrl.make_bid())
 		current_bid_count = bid["count"]; current_bid_value = bid["value"]; last_bidder = ai_id
 		var nm := get_ai_name()
-		if card_has(ai_id, "unknown_chaos"):
+		if card_has(ai_id, "unknown_chaos") and not _tutorial_active:
 			_chaos_real_bid = {"count": current_bid_count, "value": current_bid_value}
 			var fake_count: int = clampi(current_bid_count + randi() % 3 - 1, 1, 15)
 			var fake_value: int = clampi(randi() % 6 + 1, 1, 6)
@@ -853,6 +889,17 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 					if die.value == 1:
 						total_match -= 1  # 他的①不算万能
 	var bid_true: bool = total_match >= current_bid_count
+	if challenger == "player" and not bid_true:
+		_contract_challenge_success = true
+		if _tutorial_active:
+			GameState.tutorial_completed = true
+			GameState.save_progress()
+			_tutorial_active = false
+			EventBus.hint_show.emit("质疑成功：实际数量少于叫牌数量时，被质疑者失败。教学完成，接下来按正常规则战斗。", 8.0, Color(0.98, 0.78, 0.29))
+	if target == "player":
+		for observer in [ai_controller_1, ai_controller_2, ai_controller_3]:
+			if observer and observer.has_method("observe_player_bid"):
+				observer.observe_player_bid(bid_true)
 	var loser: String = target if not bid_true else challenger
 	var winner: String = challenger if not bid_true else target
 	# Save pre-infection state for dice display
@@ -905,7 +952,7 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 	var ai3_dead: bool = ai3_virus >= AI_MAX_VIRUS
 	if challenger == "player" and not bid_true and target.begins_with("ai"):
 		var devour_count: int = 0
-		if GameState.assimilation_curse == "devour_challenge": devour_count += 1
+		if GameState.assimilation_curse == "devour_challenge": devour_count += 2
 		if GameState.has_boss_fragment("recycler"): devour_count += 1
 		var devour_target: RefCounted = _get_ai_cup(target)
 		var stolen: int = 0
@@ -1088,7 +1135,7 @@ func get_min_opening() -> int:
 	if ai1_virus < AI_MAX_VIRUS: alive_count += 1
 	if ai2_virus < AI_MAX_VIRUS: alive_count += 1
 	if ai3_virus < AI_MAX_VIRUS: alive_count += 1
-	return alive_count + 1
+	return alive_count + 1 + (1 if GameState.is_forbidden_rule_active("high_pressure") else 0)
 
 ## Think delay based on rarity
 func _think_delay(ai_id: String, is_challenge: bool, is_opening: bool) -> float:
@@ -1168,6 +1215,22 @@ func reroll_player_dice(_specific_only: bool = false) -> void:
 func reroll_selected_dice(indices: Array) -> void:
 	if player_virus >= PLAYER_MAX_VIRUS: return
 	player_cup.roll_indices(indices)
+
+func queue_payout_reward(amount: int = 15) -> void:
+	_pending_payout_gold += maxi(0, amount)
+
+func claim_payout_reward() -> int:
+	var result: int = _pending_payout_gold
+	_pending_payout_gold = 0
+	return result
+
+func contract_was_completed() -> bool:
+	var contract_id: String = str(GameState.current_contract.get("id", ""))
+	match contract_id:
+		"no_item": return GameState.items_used == _contract_start_items_used
+		"bold_bid": return _contract_bold_bid
+		"true_challenge": return _contract_challenge_success
+	return false
 
 func set_player_die_value(idx: int, val: int) -> void:
 	if player_virus >= PLAYER_MAX_VIRUS: return

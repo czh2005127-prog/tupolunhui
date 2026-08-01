@@ -35,8 +35,7 @@ static func _pick_from(pool: Array, count: int) -> Array:
 	return result
 
 ## Get mixed pool for manual card selection.
-## Candidate count follows unlocked cards: 3 initially, growing to at most 5.
-## One slot is occupied by the injected unknown card.
+## Exactly five candidates: three unlocked regular cards and two distinct unknowns.
 static func get_mixed_pool(stage: int, is_boss: bool = false) -> Array:
 	var full_rarity_pool: Array
 	match stage:
@@ -45,12 +44,12 @@ static func get_mixed_pool(stage: int, is_boss: bool = false) -> Array:
 		2: full_rarity_pool = CardDataRef.get_epic_pool()
 		3: full_rarity_pool = CardDataRef.get_legendary_pool()
 		_: full_rarity_pool = CardDataRef.get_common_pool()
-	var rarity_pool: Array = _filter_unlocked(full_rarity_pool)
-	var candidate_count: int = clampi(rarity_pool.size(), MIN_CANDIDATES, MAX_CANDIDATES)
-	var picked: Array = _pick_from(full_rarity_pool, candidate_count - 1)
-	var unknown := CardDataRef.get_unknown_pool()
-	if unknown.size() > 0:
-		picked.append(unknown[randi() % unknown.size()])
+	var picked: Array = _pick_from(full_rarity_pool, 3)
+	var unknown: Array = CardDataRef.get_unknown_pool()
+	unknown.shuffle()
+	for i in range(mini(2, unknown.size())):
+		picked.append(unknown[i])
+	picked.shuffle()
 	return picked
 
 ## Get boss-only extra pool. Returns 3-5 unlocked candidates, except the single genesis card.
@@ -134,6 +133,15 @@ static func get_elite_item() -> String:
 	if selected_pool.is_empty(): selected_pool = pool
 	var item: Resource = selected_pool[randi() % selected_pool.size()]
 	return item.item_id
+
+static func get_rare_item() -> String:
+	var pool: Array = ItemData.get_unlocked_pool()
+	if pool.is_empty(): pool = ItemData.get_consumable_pool()
+	var rare: Array = []
+	for item in pool:
+		if item.rarity == ItemData.Rarity.RARE: rare.append(item)
+	if rare.is_empty(): return get_elite_item()
+	return rare[randi() % rare.size()].item_id
 
 ## Get a legendary item for boss reward
 static func get_legendary_item() -> String:

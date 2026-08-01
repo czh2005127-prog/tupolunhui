@@ -859,25 +859,20 @@ func _refresh_adjust_labels() -> void:
 		_btn_bid.color = Color(0.15, 0.35, 0.5, 1) if valid else Color(0.08, 0.08, 0.1, 0.6)
 		_btn_bid.mouse_filter = Control.MOUSE_FILTER_STOP if valid else Control.MOUSE_FILTER_IGNORE
 
-## Only count must increase (not value). Opening min = player_count + 1.
+## Delegate all bid legality, including same-count higher-face raises, to game logic.
 func _is_current_bid_valid() -> bool:
 	if not game_ctrl:
 		return false
 	if _bid_value < 1 or _bid_value > 6 or _bid_count < 1:
 		return false
-	# Delegate to game logic for opening-bid rule (alive_count + 1)
-	if game_ctrl.current_bid_count == 0:
-		var opener: bool = game_ctrl._is_valid_bid(_bid_count, _bid_value)
-		return opener
-	return _bid_count > game_ctrl.current_bid_count
+	return game_ctrl._is_valid_bid(_bid_count, _bid_value)
 
 func _on_round_started() -> void:
 	_game_over_winner = ""
 	for child in get_children():
 		if child is Control and child.name == "DiceRevealOverlay":
 			child.queue_free()
-	# Default valid opening bid: 5个2 (人数+1 = 5, ① takes 4)
-	_bid_count = 5
+	_bid_count = game_ctrl.get_min_opening()
 	_bid_value = max(2, game_ctrl.current_bid_value)
 	if bid_display:
 		bid_display.text = "开局"
@@ -916,6 +911,8 @@ func _on_turn_changed(player: String) -> void:
 	if player == "player":
 		if status_label:
 			status_label.text = "轮到你了"
+			if game_ctrl.get("_tutorial_active") and game_ctrl.current_bid_count > 0:
+				status_label.text = "对手叫牌已超过全桌骰子数，点击质疑"
 		if game_ctrl.current_bid_count > 0:
 			_bid_count = max(game_ctrl.current_bid_count + 1, _bid_count)
 		_refresh_adjust_labels()
@@ -1130,6 +1127,11 @@ var _is_boss_match: bool = false
 func _on_game_over(winner: String) -> void:
 	_game_over_winner = winner
 	if winner == "player":
+		var payout_reward: int = game_ctrl.claim_payout_reward() if game_ctrl and game_ctrl.has_method("claim_payout_reward") else 0
+		if payout_reward > 0:
+			GameState.add_gold(payout_reward)
+			EventBus.hint_show.emit("清算完成：胜利额外获得%d金币" % payout_reward, 3.0, Color(0.98, 0.78, 0.29))
+		_resolve_prisoner_contract()
 		if status_label:
 			status_label.text = "你赢了!"
 		# 追踪：击败敌人计数
@@ -1151,6 +1153,21 @@ func _on_game_over(winner: String) -> void:
 		GameState.save_progress()
 		_show_actions(false)
 		_show_death_screen()
+
+func _resolve_prisoner_contract() -> void:
+	if GameState.current_contract.is_empty() or not game_ctrl or not game_ctrl.contract_was_completed():
+		return
+	var title: String = str(GameState.current_contract.get("title", "囚徒交易"))
+	if GameState.current_contract.get("reward_type", "") == "gold":
+		var amount: int = int(GameState.current_contract.get("reward", 0))
+		GameState.add_gold(amount)
+		EventBus.hint_show.emit("交易完成·%s：+%d金币" % [title, amount], 4.0, Color(0.75, 0.45, 0.85))
+	else:
+		var item_id: String = "reroll_stone"
+		var common_items: Array = ItemData.get_unlocked_pool().filter(func(item): return item.rarity == ItemData.Rarity.COMMON)
+		if not common_items.is_empty(): item_id = common_items[randi() % common_items.size()].item_id
+		GameState.add_consumable_item(item_id)
+		EventBus.hint_show.emit("交易完成·%s：获得普通道具" % title, 4.0, Color(0.75, 0.45, 0.85))
 
 func _show_death_screen() -> void:
 	var overlay: Control = Control.new()
@@ -1603,9 +1620,9 @@ func _use_consumable_item(item_id: String) -> void:
 			_log_event("赌徒直觉: 全桌最多点数 %d" % best_val)
 			if status_label: status_label.text = "全桌最多点数: %d" % best_val
 		"payout":
-			GameState.add_gold(15)
+			game_ctrl.queue_payout_reward(15)
 			GameState.use_consumable(item_id)
-			if status_label: status_label.text = "+15 金币!"
+			if status_label: status_label.text = "胜利后结算 +15 金币"
 		"rig_dice":
 			# Select 2 dice to set to 1
 			_enter_selection_mode(item_id)

@@ -59,7 +59,7 @@ static func get_consumable_pool() -> Array:
 		make("royal_pardon", "国王赦免", "下一次致死同化改为存活并消耗", Rarity.LEGENDARY, ItemType.CONSUMABLE, 80),
 		make("gambler_hunch", "赌徒直觉", "提示区显示全桌最多的点数", Rarity.COMMON, ItemType.CONSUMABLE, 10),
 		make("borrow_die", "借骰", "选定一个对手，复制其1颗可见骰子", Rarity.COMMON, ItemType.CONSUMABLE, 12),
-		make("payout", "清算", "直接获得15金币", Rarity.COMMON, ItemType.CONSUMABLE, 8),
+		make("payout", "清算", "本场胜利后额外获得15金币", Rarity.COMMON, ItemType.CONSUMABLE, 8),
 		make("rig_dice", "虚张声势", "自己两颗骰子变为①", Rarity.LEGENDARY, ItemType.CONSUMABLE, 55),
 		make("sabotage", "算力超频", "选定一个对手，两颗骰子变为①", Rarity.LEGENDARY, ItemType.CONSUMABLE, 50),
 	]

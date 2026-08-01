@@ -4,12 +4,22 @@ extends Control
 var _flow: Node
 var _refresh_count: int = 0
 var _shelf_root: Control
+var _gamble_plays: int = 0
 
 func set_parent_flow(f: Node) -> void:
 	_flow = f
 	_refresh_count = 0
+	_gamble_plays = 0
 	GameState.refresh_shop(6)
 	_build()
+	if GameState.tutorial_enabled and GameState.tutorial_completed and not GameState.tutorial_shop_seen:
+		GameState.tutorial_shop_seen = true
+		GameState.save_progress()
+		_show_shop_tutorial()
+
+func _show_shop_tutorial() -> void:
+	var banner := Label.new(); banner.name = "TutorialBanner"; banner.text = "商店：金币购买一次性道具，最多携带3个。也可刷新货架，或尝试两次店内赌桌。"; banner.position = Vector2(250, 650); banner.size = Vector2(780, 38); banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; banner.add_theme_font_size_override("font_size", 15); banner.add_theme_color_override("font_color", Color(0.36, 0.79, 0.65)); add_child(banner)
+	var tween := create_tween(); tween.tween_interval(9.0); tween.tween_property(banner, "modulate:a", 0.0, 1.0); tween.tween_callback(banner.queue_free)
 
 func _build() -> void:
 	for child in get_children():
@@ -59,6 +69,13 @@ func _draw_topbar() -> void:
 	exit.add_theme_font_size_override("font_size", 11)
 	exit.pressed.connect(_on_continue)
 	add_child(exit)
+
+	var gamble := Button.new()
+	gamble.name = "GambleBtn"
+	gamble.text = "店内赌桌（%d/2）" % _gamble_plays
+	gamble.position = Vector2(1010, y - 2); gamble.size = Vector2(175, 24)
+	gamble.pressed.connect(_open_gamble_table)
+	add_child(gamble)
 
 # ═══════════════════════════════════════════════
 # INTEL STRIP
@@ -169,7 +186,7 @@ func _draw_shelf() -> void:
 		_draw_item_card(_shelf_root, cx, y, card_w, card_h, item)
 
 	# Refresh
-	var refresh_cost: int = 5 + _refresh_count * 5
+	var refresh_cost: int = _get_refresh_cost()
 	var rbtn := Button.new()
 	rbtn.text = "刷新货架 · %d点" % refresh_cost
 	rbtn.position = Vector2((1280 - 160) / 2, y + card_h + 16)
@@ -404,8 +421,7 @@ func _show_discard_swapper(new_id: String, item: Resource) -> void:
 	panel.add_child(cancel)
 
 func _on_refresh() -> void:
-	var costs: Array[int] = [3, 6, 10, 15, 20]
-	var cost: int = costs[_refresh_count] if _refresh_count < costs.size() else 25 + (_refresh_count - costs.size()) * 5
+	var cost: int = _get_refresh_cost()
 	if GameState.gold < cost:
 		_show_warning("刷新需要 %d 点!" % cost)
 		return
@@ -414,6 +430,57 @@ func _on_refresh() -> void:
 	GameState.refresh_shop(6)
 	_refresh_gold()
 	_update_shelf()
+
+func _get_refresh_cost() -> int:
+	var costs: Array[int] = [3, 6, 10, 15, 20]
+	return costs[_refresh_count] if _refresh_count < costs.size() else 25 + (_refresh_count - costs.size()) * 5
+
+func _open_gamble_table() -> void:
+	if _gamble_plays >= 2:
+		_show_warning("本商店的两次机会已经用完")
+		return
+	var cost: int = 5 if _gamble_plays == 0 else 10
+	if GameState.gold < cost:
+		_show_warning("需要先投入%d金币" % cost)
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "GambleOverlay"; layer.layer = 120; add_child(layer)
+	var dim := ColorRect.new(); dim.color = Color(0, 0, 0, 0.82); dim.position = Vector2.ZERO; dim.size = Vector2(1280, 720); layer.add_child(dim)
+	var panel := ColorRect.new(); panel.name = "Panel"; panel.position = Vector2(365, 160); panel.size = Vector2(550, 390); panel.color = Color(0.055, 0.045, 0.075); layer.add_child(panel)
+	var title := Label.new(); title.text = "投入 %d 金币 · 选择玩法" % cost; title.position = Vector2(0, 28); title.size = Vector2(550, 40); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 22); panel.add_child(title)
+	_make_gamble_button(panel, "猜大小 · 猜中返还125%", Vector2(75, 105), func(): _show_gamble_guesses(layer, false, cost))
+	_make_gamble_button(panel, "猜点数 · 猜中返还150%", Vector2(285, 105), func(): _show_gamble_guesses(layer, true, cost))
+	_make_gamble_button(panel, "取消", Vector2(180, 300), func(): layer.queue_free())
+
+func _show_gamble_guesses(layer: CanvasLayer, exact: bool, cost: int) -> void:
+	var panel: ColorRect = layer.get_node("Panel")
+	for child in panel.get_children(): child.queue_free()
+	var title := Label.new(); title.text = "选择你的答案"; title.position = Vector2(0, 28); title.size = Vector2(550, 40); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 22); panel.add_child(title)
+	if exact:
+		for value in range(1, 7):
+			var guessed_value: int = value
+			_make_gamble_button(panel, str(value), Vector2(55 + ((value - 1) % 3) * 165, 100 + ((value - 1) / 3) * 80), func(): _resolve_gamble(layer, cost, guessed_value, true))
+	else:
+		_make_gamble_button(panel, "小 ①②③", Vector2(75, 130), func(): _resolve_gamble(layer, cost, 0, false))
+		_make_gamble_button(panel, "大 ④⑤⑥", Vector2(285, 130), func(): _resolve_gamble(layer, cost, 1, false))
+
+func _resolve_gamble(layer: CanvasLayer, cost: int, guess: int, exact: bool) -> void:
+	if GameState.gold < cost:
+		layer.queue_free(); _show_warning("金币不足"); return
+	GameState.spend_gold(cost)
+	_gamble_plays += 1
+	var rolled: int = randi_range(1, 6)
+	var won: bool = rolled == guess if exact else ((rolled <= 3 and guess == 0) or (rolled >= 4 and guess == 1))
+	var returned: int = ceili(cost * (1.5 if exact else 1.25)) if won else 0
+	if returned > 0: GameState.add_gold(returned)
+	layer.queue_free()
+	_refresh_gold()
+	var gamble_btn: Button = find_child("GambleBtn", true, false) as Button
+	if gamble_btn: gamble_btn.text = "店内赌桌（%d/2）" % _gamble_plays
+	_show_warning("掷出%d：%s" % [rolled, "返还%d金币" % returned if won else "投入归木盒所有"])
+
+func _make_gamble_button(parent: Control, text_value: String, pos: Vector2, callback: Callable) -> Button:
+	var button := Button.new(); button.text = text_value; button.position = pos; button.size = Vector2(190, 52); button.pressed.connect(callback); parent.add_child(button); return button
 
 func _on_continue() -> void:
 	EventBus.shop_exited.emit()
