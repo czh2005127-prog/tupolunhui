@@ -55,6 +55,9 @@ var _consumable_labels: Array[Label] = []
 var _consumable_name_labels: Array[Label] = []
 var _consumable_use_btns: Array[ColorRect] = []
 var _notify_label: RichTextLabel
+var _tutorial_bar: ColorRect
+var _tutorial_label: Label
+var _tutorial_tween: Tween
 var _hint_history: Array[String] = []
 var _history_index: int = 0
 var _last_reveal_text: String = ""  # 骰子揭示文本 (显示在继续按钮上方)
@@ -186,6 +189,26 @@ func _build_all_ui() -> void:
 	points_label = _make_label("", Vector2(MX + MW - 190, 2), Vector2(120, 18), Color(0.29, 0.29, 0.33), 9)
 	points_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	add_child(points_label)
+
+	# Dedicated tutorial strip. It occupies the unused space above opponent cards
+	# and never replaces the normal skill/item notification strip.
+	_tutorial_bar = ColorRect.new()
+	_tutorial_bar.name = "TutorialBar"
+	_tutorial_bar.position = Vector2(MX + 150, 24)
+	_tutorial_bar.size = Vector2(MW - 300, 30)
+	_tutorial_bar.color = Color(0.035, 0.12, 0.105, 0.96)
+	_tutorial_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tutorial_bar.visible = false
+	add_child(_tutorial_bar)
+	_add_border(_tutorial_bar, int(_tutorial_bar.size.x), int(_tutorial_bar.size.y), Color(0.36, 0.79, 0.65), 2)
+	_tutorial_label = Label.new()
+	_tutorial_label.position = Vector2(12, 2)
+	_tutorial_label.size = Vector2(_tutorial_bar.size.x - 24, 26)
+	_tutorial_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_tutorial_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_tutorial_label.add_theme_font_size_override("font_size", 13)
+	_tutorial_label.add_theme_color_override("font_color", Color(0.78, 1.0, 0.9))
+	_tutorial_bar.add_child(_tutorial_label)
 	# Virus health squares (2 squares, inline next to exit btn)
 	for i in range(2):
 		var vq: ColorRect = ColorRect.new()
@@ -709,6 +732,7 @@ func _connect_all() -> void:
 	EventBus.half_assimilated.connect(_on_half_assimilated)
 	EventBus.card_skill_triggered.connect(_on_card_skill_triggered)
 	EventBus.hint_show.connect(_on_hint_show)
+	EventBus.tutorial_hint_show.connect(_on_tutorial_hint_show)
 	EventBus.discard_prompt.connect(_on_discard_prompt)
 
 func setup_with_flow(stage: Resource, flow: Node, param3: Variant = null) -> void:
@@ -2001,6 +2025,18 @@ func _on_hint_show(message: String, duration: float, color: Color) -> void:
 	_notify_label.add_theme_color_override("default_color", color)
 	_hint_history.append(message)
 	_history_index = _hint_history.size() - 1
+
+func _on_tutorial_hint_show(message: String, duration: float) -> void:
+	if not _tutorial_bar or not _tutorial_label: return
+	if _tutorial_tween and _tutorial_tween.is_valid():
+		_tutorial_tween.kill()
+	_tutorial_bar.modulate.a = 1.0
+	_tutorial_bar.visible = true
+	_tutorial_label.text = message
+	_tutorial_tween = create_tween()
+	_tutorial_tween.tween_interval(duration)
+	_tutorial_tween.tween_property(_tutorial_bar, "modulate:a", 0.0, 0.35)
+	_tutorial_tween.tween_callback(func(): _tutorial_bar.visible = false)
 
 func _on_hint_clicked(event: InputEvent) -> void:
 	if not (event is InputEventMouseButton and event.pressed): return

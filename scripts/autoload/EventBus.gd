@@ -35,3 +35,4 @@ signal discard_resolved
 signal shop_entered
 signal shop_exited
 signal hint_show(message: String, duration: float, color: Color)
+signal tutorial_hint_show(message: String, duration: float)

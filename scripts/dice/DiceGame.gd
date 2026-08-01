@@ -607,7 +607,7 @@ func _start_round() -> void:
 		starter = living_dealers[randi() % living_dealers.size()]
 	if _tutorial_active and round_number == 1:
 		starter = "player"
-		EventBus.hint_show.emit("先看自己的骰子：①可以代替其他点数。然后从存活人数＋1开始叫牌。", 8.0, Color(0.36, 0.79, 0.65))
+		EventBus.tutorial_hint_show.emit("先看自己的骰子：①可以代替其他点数。然后从存活人数＋1开始叫牌。", 8.0)
 	current_player = starter
 
 	turn_changed.emit(current_player)
@@ -722,7 +722,7 @@ func player_bid(count: int, value: int) -> bool:
 	if _tutorial_active and not _tutorial_opening_done:
 		_tutorial_opening_done = true
 		_tutorial_forced_bids_remaining = _living_ai_count()
-		EventBus.hint_show.emit("很好。后续必须增加数量，或数量相同时提高点数。留意明显超过全桌骰子数的叫牌。", 7.0, Color(0.36, 0.79, 0.65))
+		EventBus.tutorial_hint_show.emit("很好。后续必须增加数量，或数量相同时提高点数。留意明显超过全桌骰子数的叫牌。", 7.0)
 	var alive_at_bid: int = _living_ai_count() + (1 if player_virus < PLAYER_MAX_VIRUS else 0)
 	if count >= alive_at_bid + 4:
 		_contract_bold_bid = true
@@ -895,7 +895,7 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 			GameState.tutorial_completed = true
 			GameState.save_progress()
 			_tutorial_active = false
-			EventBus.hint_show.emit("质疑成功：实际数量少于叫牌数量时，被质疑者失败。教学完成，接下来按正常规则战斗。", 8.0, Color(0.98, 0.78, 0.29))
+			EventBus.tutorial_hint_show.emit("质疑成功：实际数量少于叫牌数量时，被质疑者失败。教学完成，接下来按正常规则战斗。", 8.0)
 	if target == "player":
 		for observer in [ai_controller_1, ai_controller_2, ai_controller_3]:
 			if observer and observer.has_method("observe_player_bid"):

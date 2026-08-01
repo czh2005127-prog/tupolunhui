@@ -10,6 +10,7 @@ const ShopUIScript := preload("res://scripts/ui/ShopUI.gd")
 const MainMenuScript := preload("res://scripts/ui/MainMenu.gd")
 const CardDrawUIScript := preload("res://scripts/ui/CardDrawUI.gd")
 const RustWorkshopScript := preload("res://scripts/ui/RustWorkshop.gd")
+const DiceGameScene := preload("res://scenes/gameflow/DiceGameScene.tscn")
 
 func _ready() -> void:
 	GameState.tutorial_completed = true
@@ -23,6 +24,7 @@ func _ready() -> void:
 	_test_random_stage_nodes()
 	_test_forbidden_rewards_and_payout()
 	_test_shop_build()
+	await _test_tutorial_bar_separation()
 	_test_ai_probability_logic()
 	_test_growth_curse()
 	await _test_rust_workshop_rebuild()
@@ -162,6 +164,17 @@ func _test_shop_build() -> void:
 	remove_child(shop)
 	shop.free()
 	GameState.tutorial_shop_seen = old_seen
+
+func _test_tutorial_bar_separation() -> void:
+	var hud = DiceGameScene.instantiate()
+	add_child(hud)
+	await get_tree().process_frame
+	EventBus.tutorial_hint_show.emit("教程测试", 5.0)
+	assert(hud.get("_tutorial_bar").visible, "教程应显示在独立教程栏")
+	assert(hud.get("_tutorial_label").text == "教程测试")
+	assert(hud.get("_notify_label").text != "教程测试", "教程不得覆盖现有提示栏")
+	remove_child(hud)
+	hud.free()
 
 func _test_rust_workshop_rebuild() -> void:
 	var workshop = RustWorkshopScript.new()
