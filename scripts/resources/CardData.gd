@@ -90,7 +90,7 @@ static func get_unknown_pool() -> Array[CardData]:
 	return [
 		make("unknown_mirror", "???·镜像", "广播", "每轮公布全场最多的1个点数", Rarity.UNKNOWN, SkillTrigger.ON_GAME_START),
 		make("unknown_chaos", "???·混沌", "乱码", "叫牌显示随机篡改", Rarity.UNKNOWN, SkillTrigger.PASSIVE),
-		make("unknown_abyss", "???·深渊", "吞噬", "整场对局结束时吞随机一个对手1颗骰子", Rarity.UNKNOWN, SkillTrigger.PASSIVE),
+		make("unknown_abyss", "???·深渊", "吞噬", "每轮质疑结算后吞随机一个对手1颗骰子", Rarity.UNKNOWN, SkillTrigger.PASSIVE),
 	]
 
 static func get_pool_by_rarity(rarity: Rarity) -> Array[CardData]:

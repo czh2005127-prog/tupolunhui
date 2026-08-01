@@ -63,52 +63,94 @@ func make_bid() -> Dictionary:
 	var my_values: Array = cup.get_all_values() if own_hidden_visible else cup.get_values()
 	if current_bid_count == 0:
 		return _make_opening_bid(my_values)
-	var should_bluff: bool = randf() < bluff_frequency
-	if should_bluff:
-		return _make_bluff_bid(my_values)
-	return _make_honest_bid(my_values)
+	return _make_evidence_bid(my_values)
 
 func _make_opening_bid(my_values: Array) -> Dictionary:
-	var best_val: int = 1; var best_cnt: int = 0
+	var best_val: int = 2
+	var best_probability: float = -1.0
 	for v: int in range(1, 7):
-		var c: int = _count_value(v, my_values)
-		if c > best_cnt: best_cnt = c; best_val = v
-	if best_val == 1 and best_cnt >= 1:
-		return {"count": max(min_opening, best_cnt + 1), "value": 1}
-	return {"count": maxi(min_opening, best_cnt + 1), "value": best_val}
+		if not _bid_is_legal(min_opening, v): continue
+		var probability: float = estimate_bid_truth_probability(min_opening, v, my_values)
+		if probability > best_probability:
+			best_probability = probability; best_val = v
+	_just_bluffed = best_probability < 0.45
+	return {"count": min_opening, "value": best_val}
 
-func _make_bluff_bid(my_values: Array) -> Dictionary:
-	_just_bluffed = true
-	var target_value: int = randi() % 6 + 1
-	var bluff_count: int = current_bid_count + 1 + randi() % 3
-	return {"count": max(current_bid_count + 1, bluff_count), "value": target_value}
-
-func _make_honest_bid(my_values: Array) -> Dictionary:
-	_just_bluffed = false
-	var best_val: int = 1; var best_cnt: int = 0
-	for v: int in range(1, 7):
-		var c: int = _count_for_target(v, my_values)
-		if c > best_cnt: best_cnt = c; best_val = v
-	var pool_max: int = cup.dice.size() + total_other_dice + 2
-	return {"count": clamp(current_bid_count + 1, 1, pool_max), "value": best_val}
+func _make_evidence_bid(my_values: Array) -> Dictionary:
+	var candidates: Array[Dictionary] = []
+	# Prefer the smallest legal raise. A larger jump is considered only when the
+	# visible evidence makes that quantity safer than an ordinary one-step raise.
+	for value in range(current_bid_value + 1, 7):
+		if _bid_is_legal(current_bid_count, value):
+			candidates.append({"count": current_bid_count, "value": value})
+	for value in range(1, 7):
+		if _bid_is_legal(current_bid_count + 1, value):
+			candidates.append({"count": current_bid_count + 1, "value": value})
+	for value in range(1, 7):
+		var support: float = _expected_total_for(value, my_values)
+		var supported_count: int = mini(current_bid_count + 3, floori(support))
+		if supported_count > current_bid_count + 1 and _bid_is_legal(supported_count, value):
+			if estimate_bid_truth_probability(supported_count, value, my_values) >= 0.72:
+				candidates.append({"count": supported_count, "value": value})
+	if candidates.is_empty():
+		return {"count": current_bid_count + 1, "value": 2}
+	var best: Dictionary = candidates[0]
+	var best_score: float = -100.0
+	for candidate in candidates:
+		var probability: float = estimate_bid_truth_probability(candidate.count, candidate.value, my_values)
+		var jump_penalty: float = maxf(0.0, float(candidate.count - current_bid_count - 1)) * 0.12
+		var score: float = probability - jump_penalty + randf_range(-0.025, 0.025)
+		if score > best_score:
+			best_score = score; best = candidate
+	_just_bluffed = estimate_bid_truth_probability(best.count, best.value, my_values) < 0.42
+	return best
 
 func _evaluate_challenge() -> bool:
 	if current_bid_count == 0: return false
 	var own_values: Array = cup.get_all_values() if own_hidden_visible else cup.get_values()
-	var my_count: int = _count_for_target(current_bid_value, own_values)
-	var extra: int = 0
-	if player_full_values.size() > 0:
-		extra = _count_for_target(current_bid_value, player_full_values)
-	# 老杰克 偷窥: use the peeked value as additional info
-	if card.card_id == "jack_crt" and _peeked_player_value > 0:
-		extra = maxi(extra, _count_for_target(current_bid_value, [_peeked_player_value]))
-	var possible_total: int = my_count + max(extra, int(total_other_dice * 0.4))
-	if current_bid_count > possible_total: return true
-	var threshold: float = challenge_certainty + suspicion_of_player * 0.3
-	if my_count == 0 and current_bid_count > 3: return randf() < threshold * 1.5
-	var gap: int = current_bid_count - my_count - (total_other_dice / 3)
-	if gap > 0: return randf() < threshold * gap * 0.2
-	return randf() < threshold * 0.03
+	var truth_probability: float = estimate_bid_truth_probability(current_bid_count, current_bid_value, own_values)
+	var rarity: int = int(card.rarity) if card else 0
+	var challenge_line: float = clampf(0.28 + rarity * 0.045 + suspicion_of_player * 0.12, 0.25, 0.62)
+	# Small noise prevents identical cards from becoming perfectly readable while
+	# preserving evidence as the dominant factor.
+	return truth_probability < challenge_line + randf_range(-0.035, 0.035)
+
+func estimate_bid_truth_probability(bid_count: int, bid_value: int, own_values: Array) -> float:
+	var known_values: Array = player_full_values.duplicate()
+	if known_values.is_empty() and card and card.card_id == "jack_crt" and _peeked_player_value > 0:
+		known_values.append(_peeked_player_value)
+	var certain_matches: int = _count_for_target(bid_value, own_values) + _count_for_target(bid_value, known_values)
+	var unknown_count: int = maxi(0, total_other_dice - known_values.size())
+	var needed: int = bid_count - certain_matches
+	if needed <= 0: return 1.0
+	if needed > unknown_count: return 0.0
+	var face_probability: float = _unknown_match_probability(bid_value)
+	var result: float = 0.0
+	for hits in range(needed, unknown_count + 1):
+		result += _binomial_term(unknown_count, hits, face_probability)
+	return clampf(result, 0.0, 1.0)
+
+func _expected_total_for(value: int, own_values: Array) -> float:
+	var known_values: Array = player_full_values
+	var unknown_count: int = maxi(0, total_other_dice - known_values.size())
+	return float(_count_for_target(value, own_values) + _count_for_target(value, known_values)) + unknown_count * _unknown_match_probability(value)
+
+func _unknown_match_probability(target: int) -> float:
+	if target == 1:
+		return 2.0 / 6.0 if _six_wild else 1.0 / 6.0
+	return 3.0 / 6.0 if _six_wild else 2.0 / 6.0
+
+func _binomial_term(n: int, k: int, probability: float) -> float:
+	var combinations: float = 1.0
+	for i in range(1, k + 1):
+		combinations *= float(n - k + i) / float(i)
+	return combinations * pow(probability, k) * pow(1.0 - probability, n - k)
+
+func _bid_is_legal(count: int, value: int) -> bool:
+	if _game and _game.has_method("_is_valid_bid"):
+		return bool(_game._is_valid_bid(count, value))
+	if current_bid_count == 0: return count >= min_opening
+	return count > current_bid_count or (count == current_bid_count and value > current_bid_value)
 
 func _count_for_target(target: int, values: Array) -> int:
 	var c: int = 0

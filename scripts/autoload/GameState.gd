@@ -42,6 +42,8 @@ var _seen_events: Array[String] = []
 var next_battle_fixed_six: bool = false
 var next_boss_dice_penalty: int = 0
 var next_boss_start_assimilated: bool = false
+var saved_battle_card_ids: Array[String] = []
+var _battle_entry_snapshot: Dictionary = {}
 
 # ----- Rust Contract system -----
 # Card upgrade levels: { card_id: level (0-3) }
@@ -190,6 +192,12 @@ func assimilate() -> void:
 	elif assimilation_count >= MAX_ASSIMILATION:
 		EventBus.fully_assimilated.emit()
 
+func force_full_assimilation() -> void:
+	if assimilation_count < MAX_ASSIMILATION:
+		assimilation_count = MAX_ASSIMILATION
+		total_assimilations += 1
+	EventBus.fully_assimilated.emit()
+
 func clear_assimilation() -> void:
 	assimilation_count = 0
 	persistent_virus = 0
@@ -229,19 +237,23 @@ func replace_boss_fragment(old_index: int, new_card_id: String) -> bool:
 	return true
 
 func _apply_fragment_acquisition_reward(card_id: String) -> void:
-	if card_id == "dice_god":
-		add_rust_points(3)
-		_pending_xp += 50
+	pass
+
+func consume_boss_fragment(card_id: String) -> bool:
+	var idx: int = boss_fragments.find(card_id)
+	if idx < 0: return false
+	boss_fragments.remove_at(idx)
+	return true
 
 func get_battle_reward_multiplier(cards: Array) -> float:
 	if cards.is_empty():
 		return 1.0
-	const LEVEL_MULTIPLIERS: Array[float] = [1.0, 1.05, 1.12, 1.22, 1.35, 1.50]
+	const LEVEL_MULTIPLIERS: Array[float] = [1.0, 1.05, 1.12, 1.22]
 	var bonus_sum: float = 0.0
 	var counted: int = 0
 	for card in cards:
 		if card == null: continue
-		var level: int = clampi(get_card_level(card.card_id), 0, 5)
+		var level: int = clampi(get_card_level(card.card_id), 0, 3)
 		bonus_sum += LEVEL_MULTIPLIERS[level] - 1.0
 		counted += 1
 	return 1.0 + (bonus_sum / float(counted)) if counted > 0 else 1.0
@@ -336,7 +348,7 @@ func get_next_card_level_cost(card_id: String) -> int:
 	var card := CardData.get_card_by_id(card_id)
 	if card == null: return 0
 	var purchased: int = get_purchased_card_level(card_id)
-	return 0 if get_card_level(card_id) < purchased else mini(5, purchased + 1)
+	return 0 if get_card_level(card_id) < purchased else mini(3, purchased + 1)
 
 func get_max_level_for_card(card_id: String) -> int:
 	return _get_max_level(card_id)
@@ -354,12 +366,14 @@ func _get_upgrade_cost(rarity: int) -> int:
 		CardData.Rarity.UNKNOWN: return 5
 	return 1
 
-## Max levels per card (five-stage curve; explicitly non-upgradable cards remain at zero)
+## Max levels per card
 func _get_max_level(card_id: String) -> int:
 	var no_upgrade := ["two_face", "mirror_tech", "dealer", "dice_god", "unknown_mirror", "unknown_chaos", "unknown_abyss"]
 	if card_id in no_upgrade:
 		return 0
-	return 5
+	if card_id == "alliance_oled": return 1
+	if card_id in ["table_ghost", "prophet"]: return 2
+	return 3
 
 ## Rust points for this run
 func get_run_rust_points() -> int:
@@ -398,7 +412,71 @@ func setup_new_run() -> void:
 	next_battle_fixed_six = false
 	next_boss_dice_penalty = 0
 	next_boss_start_assimilated = false
+	saved_battle_card_ids.clear()
+	_battle_entry_snapshot.clear()
 	_clear_save()
+
+## Freeze the run at the moment after opponents are chosen but before battle setup
+## consumes one-shot modifiers. Pausing during the battle always returns here.
+func capture_battle_entry(cards: Array) -> void:
+	saved_battle_card_ids.clear()
+	for card in cards:
+		if card != null:
+			saved_battle_card_ids.append(str(card.card_id))
+	_battle_entry_snapshot = {
+		"gold": gold,
+		"assimilation_count": assimilation_count,
+		"current_stage": current_stage,
+		"current_node_index": current_node_index,
+		"stages_cleared": stages_cleared.duplicate(),
+		"consumable_items": consumable_items.duplicate(),
+		"boss_fragments": boss_fragments.duplicate(),
+		"assimilation_curse": assimilation_curse,
+		"temp_bonus_dice": _temp_bonus_dice,
+		"next_battle_fixed_six": next_battle_fixed_six,
+		"next_boss_dice_penalty": next_boss_dice_penalty,
+		"next_boss_start_assimilated": next_boss_start_assimilated,
+		"total_assimilations": total_assimilations,
+		"events_completed": events_completed,
+		"items_used": items_used,
+		"bosses_defeated": bosses_defeated.duplicate(),
+		"enemies_defeated_this_run": enemies_defeated_this_run,
+		"final_stage_reached": final_stage_reached,
+		"final_node_reached": final_node_reached,
+		"run_rust_points": _run_rust_points,
+		"run_xp": _run_xp,
+		"pending_xp": _pending_xp,
+		"card_ids": saved_battle_card_ids.duplicate(),
+	}
+
+func clear_battle_entry() -> void:
+	_battle_entry_snapshot.clear()
+	saved_battle_card_ids.clear()
+
+func _restore_battle_entry(snapshot: Dictionary) -> void:
+	gold = int(snapshot.get("gold", gold))
+	assimilation_count = int(snapshot.get("assimilation_count", assimilation_count))
+	current_stage = int(snapshot.get("current_stage", current_stage))
+	current_node_index = int(snapshot.get("current_node_index", current_node_index))
+	stages_cleared.assign(snapshot.get("stages_cleared", stages_cleared))
+	consumable_items.assign(snapshot.get("consumable_items", consumable_items))
+	boss_fragments.assign(snapshot.get("boss_fragments", boss_fragments))
+	assimilation_curse = str(snapshot.get("assimilation_curse", assimilation_curse))
+	_temp_bonus_dice = int(snapshot.get("temp_bonus_dice", 0))
+	next_battle_fixed_six = bool(snapshot.get("next_battle_fixed_six", false))
+	next_boss_dice_penalty = int(snapshot.get("next_boss_dice_penalty", 0))
+	next_boss_start_assimilated = bool(snapshot.get("next_boss_start_assimilated", false))
+	total_assimilations = int(snapshot.get("total_assimilations", total_assimilations))
+	events_completed = int(snapshot.get("events_completed", events_completed))
+	items_used = int(snapshot.get("items_used", items_used))
+	bosses_defeated.assign(snapshot.get("bosses_defeated", bosses_defeated))
+	enemies_defeated_this_run = int(snapshot.get("enemies_defeated_this_run", enemies_defeated_this_run))
+	final_stage_reached = int(snapshot.get("final_stage_reached", final_stage_reached))
+	final_node_reached = int(snapshot.get("final_node_reached", final_node_reached))
+	_run_rust_points = int(snapshot.get("run_rust_points", _run_rust_points))
+	_run_xp = int(snapshot.get("run_xp", _run_xp))
+	_pending_xp = int(snapshot.get("pending_xp", _pending_xp))
+	saved_battle_card_ids.assign(snapshot.get("card_ids", []))
 
 func calculate_score() -> Dictionary:
 	var boss_bonus: int = bosses_defeated.size() * 100
@@ -413,32 +491,49 @@ func calculate_score() -> Dictionary:
 	return {"score": total, "tier": tier, "boss_bonus": boss_bonus, "gold_bonus": gold_bonus, "assimilation_penalty": assimilation_penalty, "event_bonus": event_bonus}
 
 func save_run(_dice_game_virus: int = 0, temporarily_disabled_items: Array = [], restart_modifiers: Dictionary = {}) -> void:
-	assimilation_count = clampi(maxi(assimilation_count, _dice_game_virus), 0, MAX_ASSIMILATION)
+	var snapshot: Dictionary = _battle_entry_snapshot.duplicate(true)
+	if snapshot.is_empty():
+		var saved_items: Array[String] = consumable_items.duplicate()
+		for item_id in temporarily_disabled_items:
+			saved_items.append(str(item_id))
+		snapshot = {
+			"gold": gold, "assimilation_count": clampi(maxi(assimilation_count, _dice_game_virus), 0, MAX_ASSIMILATION),
+			"current_stage": current_stage, "current_node_index": current_node_index,
+			"stages_cleared": stages_cleared.duplicate(), "consumable_items": saved_items,
+			"boss_fragments": boss_fragments.duplicate(), "assimilation_curse": assimilation_curse,
+			"temp_bonus_dice": maxi(_temp_bonus_dice, int(restart_modifiers.get("bonus_dice", 0))),
+			"next_battle_fixed_six": next_battle_fixed_six or bool(restart_modifiers.get("fixed_six", false)),
+			"next_boss_dice_penalty": maxi(next_boss_dice_penalty, int(restart_modifiers.get("boss_dice_penalty", 0))),
+			"next_boss_start_assimilated": next_boss_start_assimilated,
+			"card_ids": saved_battle_card_ids.duplicate(),
+		}
 	var f := FileAccess.open("user://save_game.dat", FileAccess.WRITE)
 	if not f:
 		return
-	f.store_32(gold)
-	f.store_32(assimilation_count)
-	f.store_32(current_stage)
-	f.store_32(current_node_index)
-	f.store_32(stages_cleared.size())
-	for s in stages_cleared:
+	f.store_32(int(snapshot.get("gold", gold)))
+	f.store_32(int(snapshot.get("assimilation_count", assimilation_count)))
+	f.store_32(int(snapshot.get("current_stage", current_stage)))
+	f.store_32(int(snapshot.get("current_node_index", current_node_index)))
+	var snap_stages: Array = snapshot.get("stages_cleared", stages_cleared)
+	f.store_32(snap_stages.size())
+	for s in snap_stages:
 		f.store_32(s)
-	var saved_items: Array[String] = consumable_items.duplicate()
-	for item_id in temporarily_disabled_items:
-		saved_items.append(str(item_id))
+	var saved_items: Array = snapshot.get("consumable_items", consumable_items)
 	f.store_32(saved_items.size())
 	for item in saved_items:
 		f.store_pascal_string(item)
-	f.store_32(_dice_game_virus)
-	f.store_32(maxi(_temp_bonus_dice, int(restart_modifiers.get("bonus_dice", 0))))
-	f.store_32(1 if next_battle_fixed_six or bool(restart_modifiers.get("fixed_six", false)) else 0)
-	f.store_32(maxi(next_boss_dice_penalty, int(restart_modifiers.get("boss_dice_penalty", 0))))
-	f.store_32(1 if next_boss_start_assimilated else 0)
-	f.store_32(boss_fragments.size())
-	for fragment_id in boss_fragments:
+	f.store_32(int(snapshot.get("assimilation_count", assimilation_count)))
+	f.store_32(int(snapshot.get("temp_bonus_dice", 0)))
+	f.store_32(1 if bool(snapshot.get("next_battle_fixed_six", false)) else 0)
+	f.store_32(int(snapshot.get("next_boss_dice_penalty", 0)))
+	f.store_32(1 if bool(snapshot.get("next_boss_start_assimilated", false)) else 0)
+	var snap_fragments: Array = snapshot.get("boss_fragments", boss_fragments)
+	f.store_32(snap_fragments.size())
+	for fragment_id in snap_fragments:
 		f.store_pascal_string(fragment_id)
-	f.store_pascal_string(assimilation_curse)
+	f.store_pascal_string(str(snapshot.get("assimilation_curse", "")))
+	f.store_pascal_string("BATTLE_ENTRY_V2")
+	f.store_var(snapshot, true)
 	f.close()
 
 func has_saved_game() -> bool:
@@ -473,6 +568,13 @@ func load_run() -> bool:
 		for _i in range(fragment_count):
 			if f.get_position() < f.get_length(): boss_fragments.append(f.get_pascal_string())
 	if f.get_position() < f.get_length(): assimilation_curse = f.get_pascal_string()
+	if f.get_position() < f.get_length():
+		var marker: String = f.get_pascal_string()
+		if marker == "BATTLE_ENTRY_V2" and f.get_position() < f.get_length():
+			var loaded_snapshot: Variant = f.get_var(true)
+			if loaded_snapshot is Dictionary:
+				_battle_entry_snapshot = loaded_snapshot
+				_restore_battle_entry(_battle_entry_snapshot)
 	f.close()
 	return true
 
@@ -548,10 +650,34 @@ func load_progress() -> void:
 	else:
 		purchased_card_levels = card_levels.duplicate()
 	f.close()
+	var upgrade_data_migrated: bool = _migrate_three_level_upgrades()
 	# Rebuild all level-based unlocks so older saves with an empty card list migrate safely.
 	for level in range(1, player_level + 1):
 		_apply_unlock(level)
 	_ensure_starter_items()
+	if upgrade_data_migrated:
+		save_progress()
+
+func _migrate_three_level_upgrades() -> bool:
+	var changed: bool = false
+	var all_ids: Array = purchased_card_levels.keys()
+	for card_id in card_levels.keys():
+		if card_id not in all_ids: all_ids.append(card_id)
+	for raw_id in all_ids:
+		var card_id: String = str(raw_id)
+		var maximum: int = _get_max_level(card_id)
+		var purchased: int = int(purchased_card_levels.get(card_id, card_levels.get(card_id, 0)))
+		if purchased > maximum:
+			for removed_level in range(maximum + 1, purchased + 1):
+				rust_points += removed_level
+			purchased_card_levels[card_id] = maximum
+			changed = true
+		var active: int = int(card_levels.get(card_id, 0))
+		var clamped_active: int = clampi(active, 0, mini(maximum, int(purchased_card_levels.get(card_id, purchased))))
+		if clamped_active != active:
+			card_levels[card_id] = clamped_active
+			changed = true
+	return changed
 
 ## Stage gold payout per layer
 static func get_stage_gold(stage: int) -> int:

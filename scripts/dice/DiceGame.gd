@@ -109,12 +109,6 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 	else:
 		ai_controller_3 = null
 		ai3_virus = AI_MAX_VIRUS  # dead by default in non-boss mode
-	for ai_setup in [[card1, ai_cup_1], [card2, ai_cup_2], [card3, ai_cup_3]]:
-		if ai_setup[0] == null: continue
-		var rust_level: int = GameState.get_card_level(ai_setup[0].card_id)
-		var rust_bonus: int = get_rust_start_dice_bonus(rust_level)
-		for _i in range(rust_bonus):
-			ai_setup[1].add_die()
 	if is_boss_mode and GameState.next_boss_dice_penalty > 0:
 		_boss_dice_penalty_applied = GameState.next_boss_dice_penalty
 		for cup: RefCounted in [ai_cup_1, ai_cup_2, ai_cup_3]:
@@ -158,7 +152,7 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 		if detected_card_id == "casino_owner": var cas_hint: int = 2 if GameState.get_card_level("casino_owner") >= 1 else 1; EventBus.hint_show.emit("赌场主·暗骰加码: 每人+%d暗骰" % cas_hint, 4.0, Color(0.52, 0.72, 0.92))
 		if detected_card_id == "prophet": EventBus.hint_show.emit("算法先知·重算: 每轮重掷骰子", 4.0, Color(0.98, 0.78, 0.29))
 		if detected_card_id == "dice_god": EventBus.hint_show.emit("骰子之神·禁忌变更: 每轮换禁忌点数", 4.0, Color(0.98, 0.35, 0.35))
-		if detected_card_id == "unknown_abyss": EventBus.hint_show.emit("深渊·吞噬: 本局结束吞1骰", 4.0, Color(0.55, 0.35, 0.65))
+		if detected_card_id == "unknown_abyss": EventBus.hint_show.emit("深渊·吞噬: 每轮结束吞1骰", 4.0, Color(0.55, 0.35, 0.65))
 		if ai_info[1].card_id == "table_ghost": EventBus.card_skill_triggered.emit("table_ghost", "附身就绪", ai_info[0])
 		if ai_info[1].card_id == "chamberlain":
 			var chamberlain_items: Array[String] = []
@@ -231,7 +225,7 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 				dealer_cup.add_die()
 		EventBus.hint_show.emit("庄家·开盘: %s 开局拥有8颗骰子" % get_ai_name_for_id(dealer_id), 4.0, Color(0.52, 0.72, 0.92))
 	if _boss_card_id == "dealer":
-		ai_cup_3.add_die(); ai_cup_3.add_die()
+		ai_cup_3.add_die()
 	if _boss_card_id == "table_ghost":
 		if ai1_virus < AI_MAX_VIRUS: _ai_shields["ai1"] = true
 		if ai2_virus < AI_MAX_VIRUS: _ai_shields["ai2"] = true
@@ -269,9 +263,6 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 	game_active = true; round_number = 0
 	boss_mode_changed.emit(is_boss_mode)
 	_start_round()
-
-static func get_rust_start_dice_bonus(level: int) -> int:
-	return 4 if level >= 5 else (2 if level >= 4 else (1 if level >= 3 else 0))
 
 func _get_ai_cup(ai_id: String) -> RefCounted:
 	match ai_id:
@@ -333,11 +324,12 @@ func _apply_player_round_effects() -> void:
 			var changed_idx: int = one_indices[randi() % one_indices.size()]
 			player_cup.dice[changed_idx].value = randi_range(2, 6)
 	if GameState.has_boss_fragment("lucky_one"):
-		var non_one: Array[int] = []
-		for i in range(player_cup.dice.size()):
-			if player_cup.dice[i].value != 1: non_one.append(i)
-		if not non_one.is_empty():
-			player_cup.dice[non_one[randi() % non_one.size()]].value = 1
+		var lucky_indices: Array[int] = []
+		for lucky_index in range(player_cup.dice.size()):
+			lucky_indices.append(lucky_index)
+		lucky_indices.shuffle()
+		for i in range(mini(2, lucky_indices.size())):
+			if randf() < 0.5: player_cup.dice[lucky_indices[i]].value = 1
 	if GameState.has_boss_fragment("mirror_tech") and round_number == 1 and not player_cup.dice.is_empty():
 		player_cup.clone_at(randi() % player_cup.dice.size())
 	if GameState.has_boss_fragment("prophet"):
@@ -361,7 +353,9 @@ func _apply_player_round_effects() -> void:
 			for die in target_cup.dice:
 				if not die.is_hidden: visible_values.append(die.value)
 			if not visible_values.is_empty():
-				EventBus.hint_show.emit("同盟碎片看见 %s 的一颗骰子：%d" % [get_ai_name_for_id(target_id), visible_values[randi() % visible_values.size()]], 4.0, Color(0.36, 0.79, 0.65))
+				visible_values.shuffle()
+				var revealed: Array = visible_values.slice(0, mini(2, visible_values.size()))
+				EventBus.hint_show.emit("同盟碎片公开 %s 的骰子：%s" % [get_ai_name_for_id(target_id), str(revealed)], 4.0, Color(0.36, 0.79, 0.65))
 
 func _apply_boss_round_effects() -> void:
 	if _boss_card_id.is_empty() or not _is_ai_alive(_boss_ai_id): return
@@ -615,7 +609,8 @@ func _is_valid_bid(count: int, value: int) -> bool:
 func _infect_player() -> bool:
 	if GameState.has_boss_fragment("table_ghost") and not _fragment_ghost_used:
 		_fragment_ghost_used = true
-		EventBus.hint_show.emit("幽灵碎片免疫了本局第一次同化", 3.0, Color(0.75, 0.45, 0.85))
+		GameState.consume_boss_fragment("table_ghost")
+		EventBus.hint_show.emit("幽灵碎片抵挡同化后消失", 3.0, Color(0.75, 0.45, 0.85))
 		return false
 	var pardon_count_before: int = GameState.consumable_items.count("royal_pardon")
 	GameState.assimilate()
@@ -640,14 +635,51 @@ func _infect_ai_immediately(ai_id: String) -> bool:
 		_apply_rust_warrior_skill(ai_id)
 	return eliminated
 
-func _apply_forbidden_penalty(bidder: String) -> void:
+func _apply_forbidden_penalty(bidder: String) -> bool:
 	if GameState.current_stage != 3 or current_bid_value not in [forbidden_number, boss_forbidden_number]:
-		return
+		return false
 	var cup: RefCounted = player_cup if bidder == "player" else _get_ai_cup(bidder)
 	if cup and cup.dice.size() > 0:
 		cup.dice.pop_back()
 		cup.dice_count -= 1
 	EventBus.hint_show.emit("%s 叫到禁忌点数，扣除1颗骰子" % bidder, 3.0, Color(0.98, 0.35, 0.35))
+	if cup == null or cup.dice.size() > 0:
+		return false
+	EventBus.hint_show.emit("%s 的骰子归零，立即淘汰" % ("你" if bidder == "player" else get_ai_name_for_id(bidder)), 3.0, Color(0.98, 0.2, 0.2))
+	if bidder == "player":
+		GameState.force_full_assimilation()
+		player_virus = PLAYER_MAX_VIRUS
+		game_active = false
+		_restore_noise_items()
+		game_over.emit("ai")
+		return true
+	var ctrl: RefCounted = _get_ai_controller(bidder)
+	if ctrl: ctrl.is_eliminated = true
+	match bidder:
+		"ai1": ai1_virus = AI_MAX_VIRUS
+		"ai2": ai2_virus = AI_MAX_VIRUS
+		"ai3": ai3_virus = AI_MAX_VIRUS
+	_apply_rust_warrior_skill(bidder)
+	if _living_ai_count() == 0:
+		game_active = false
+		_restore_noise_items()
+		game_over.emit("player")
+	else:
+		_continue_round()
+	return true
+
+func _living_ai_count() -> int:
+	var count: int = 0
+	if ai1_virus < AI_MAX_VIRUS: count += 1
+	if ai2_virus < AI_MAX_VIRUS: count += 1
+	if ai3_virus < AI_MAX_VIRUS: count += 1
+	return count
+
+func _restore_noise_items() -> void:
+	if _noise_removed_items.is_empty(): return
+	for item_id in _noise_removed_items:
+		GameState.add_consumable_item(item_id)
+	_noise_removed_items.clear()
 
 func _sanitize_ai_bid(proposed: Dictionary) -> Dictionary:
 	var proposed_count: int = int(proposed.get("count", 0))
@@ -671,7 +703,7 @@ func player_bid(count: int, value: int) -> bool:
 	if not _is_valid_bid(count, value): return false
 	current_bid_count = count; current_bid_value = value; last_bidder = "player"
 	bid_updated.emit(count, value, "你")
-	_apply_forbidden_penalty("player")
+	if _apply_forbidden_penalty("player"): return true
 	_next_player()
 	return true
 
@@ -784,7 +816,7 @@ func _ai_turn(ai_id: String) -> void:
 			bid_updated.emit(fake_count, fake_value, nm + " [?]")
 		else:
 			bid_updated.emit(current_bid_count, current_bid_value, nm)
-		_apply_forbidden_penalty(ai_id)
+		if _apply_forbidden_penalty(ai_id): return
 		_next_player()
 
 func get_ai_name() -> String:
@@ -877,14 +909,14 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 		if GameState.has_boss_fragment("recycler"): devour_count += 1
 		var devour_target: RefCounted = _get_ai_cup(target)
 		var stolen: int = 0
-		while stolen < devour_count and devour_target and not devour_target.dice.is_empty():
+		while stolen < devour_count and devour_target and devour_target.dice.size() > 1:
 			devour_target.dice.pop_back(); devour_target.dice_count -= 1
 			player_cup.add_die(); stolen += 1
 		if stolen > 0:
 			EventBus.hint_show.emit("吞噬成功：从%s夺取%d颗骰子" % [get_ai_name_for_id(target), stolen], 3.0, Color(0.36, 0.79, 0.65))
 	if _boss_card_id == "recycler" and _is_ai_alive(_boss_ai_id) and loser != _boss_ai_id:
 		var loser_cup: RefCounted = player_cup if loser == "player" else _get_ai_cup(loser)
-		if loser_cup and not loser_cup.dice.is_empty():
+		if loser_cup and loser_cup.dice.size() > 1:
 			loser_cup.dice.pop_back(); loser_cup.dice_count -= 1
 			ai_cup_3.add_die()
 			EventBus.hint_show.emit("Boss·强制回收：从本轮失败者处夺取1颗骰子", 3.0, Color(0.98, 0.35, 0.35))
@@ -900,7 +932,7 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 			# Lv.2+: 被质疑者额外失去1骰，由本次触发的回收商吸收。
 			if rec_lv >= 2 and target != recycler_id:
 				var challenged_cup: RefCounted = player_cup if target == "player" else _get_ai_cup(target)
-				if challenged_cup and challenged_cup.dice.size() > 0:
+				if challenged_cup and challenged_cup.dice.size() > 1:
 					challenged_cup.dice.pop_back(); challenged_cup.dice_count -= 1
 					recycler_cup.add_die()
 					EventBus.hint_show.emit("回收商吸走了被质疑者的1颗骰子!", 3.0, Color(0.52, 0.72, 0.92))
@@ -940,9 +972,9 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 		if gifted > 0:
 			EventBus.card_skill_triggered.emit("table_ghost", "附身(%d人)" % gifted, "")
 			EventBus.hint_show.emit("赌桌幽灵附身 %d 人：各获得1颗骰子" % gifted, 3.0, Color(0.75, 0.45, 0.85))
+	_apply_abyss_round_end()
 	if player_dead and game_active:
 		game_active = false
-		_apply_abyss_battle_end()
 		if _noise_removed_items.size() > 0:
 			for item_id in _noise_removed_items:
 				GameState.add_consumable_item(item_id)
@@ -953,26 +985,26 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 	if not ai3_dead: alive_ai_count += 1
 	if alive_ai_count == 0 and game_active:
 		game_active = false
-		_apply_abyss_battle_end()
 		if _noise_removed_items.size() > 0:
 			for item_id in _noise_removed_items:
 				GameState.add_consumable_item(item_id)
 		game_over.emit("player"); return
 	_continue_round()
 
-func _apply_abyss_battle_end() -> void:
+func _apply_abyss_round_end() -> void:
 	for abyss_id in _living_card_ais("unknown_abyss"):
 		var targets: Array[String] = []
-		if player_cup.dice.size() > 0: targets.append("player")
-		if abyss_id != "ai1" and ai_cup_1.dice.size() > 0: targets.append("ai1")
-		if abyss_id != "ai2" and ai_cup_2.dice.size() > 0: targets.append("ai2")
-		if abyss_id != "ai3" and ai_cup_3.dice.size() > 0: targets.append("ai3")
+		if player_virus < PLAYER_MAX_VIRUS and player_cup.dice.size() >= 2: targets.append("player")
+		if abyss_id != "ai1" and ai1_virus < AI_MAX_VIRUS and ai_cup_1.dice.size() >= 2: targets.append("ai1")
+		if abyss_id != "ai2" and ai2_virus < AI_MAX_VIRUS and ai_cup_2.dice.size() >= 2: targets.append("ai2")
+		if abyss_id != "ai3" and ai3_virus < AI_MAX_VIRUS and ai_cup_3.dice.size() >= 2: targets.append("ai3")
 		if targets.is_empty(): continue
 		var victim: String = targets[randi() % targets.size()]
 		var victim_cup: RefCounted = player_cup if victim == "player" else _get_ai_cup(victim)
 		victim_cup.dice.pop_back(); victim_cup.dice_count -= 1
 		_get_ai_cup(abyss_id).add_die()
-		EventBus.card_skill_triggered.emit("abyss", "本局结束吞噬", victim)
+		EventBus.card_skill_triggered.emit("abyss", "每轮吞噬", victim)
+		EventBus.hint_show.emit("深渊吞噬了%s的1颗骰子" % ("你" if victim == "player" else get_ai_name_for_id(victim)), 3.0, Color(0.55, 0.35, 0.65))
 
 ## Apply rust_warrior skill on elimination (Lv.1=2人, Lv.2=对手-1骰, Lv.3=全生存+对手扣骰)
 func _apply_rust_warrior_skill(eliminated_ai: String, attacker: String = "") -> void:
@@ -1056,8 +1088,7 @@ func get_min_opening() -> int:
 	if ai1_virus < AI_MAX_VIRUS: alive_count += 1
 	if ai2_virus < AI_MAX_VIRUS: alive_count += 1
 	if ai3_virus < AI_MAX_VIRUS: alive_count += 1
-	var boss_extra: int = 2 if _boss_card_id == "dealer" and _is_ai_alive(_boss_ai_id) else 0
-	return alive_count + 1 + boss_extra
+	return alive_count + 1
 
 ## Think delay based on rarity
 func _think_delay(ai_id: String, is_challenge: bool, is_opening: bool) -> float:
@@ -1245,14 +1276,14 @@ func skip_player_turn() -> void:
 	if current_player == "player":
 		_next_player()
 
-func sabotage_enemy_dice(ai_id: String) -> void:
+func sabotage_enemy_dice(ai_id: String) -> bool:
 	var cup: RefCounted = _get_ai_cup(ai_id)
-	if cup == null: return
-	if cup.dice.size() < 2: return
+	if cup == null or cup.dice.size() < 2: return false
 	var i1: int = randi() % cup.dice.size()
 	var i2: int = (i1 + 1 + randi() % max(1, cup.dice.size() - 1)) % cup.dice.size()
 	cup.dice[i1].value = 1
 	cup.dice[i2].value = 1
+	return true
 
 func peek_ai_die(ai_id: String, idx: int) -> int:
 	var cup = null

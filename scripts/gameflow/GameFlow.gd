@@ -80,6 +80,16 @@ func _run_node(node_type: int) -> void:
 func _launch_battle(is_boss: bool) -> void:
 	_is_boss_node = is_boss
 	_battle_gold = CardPoolRef.get_battle_gold(current_stage_index)
+	if not GameState.saved_battle_card_ids.is_empty():
+		_drawn_cards.clear()
+		for card_id in GameState.saved_battle_card_ids:
+			var restored_card = CardData.get_card_by_id(card_id)
+			if restored_card != null:
+				_drawn_cards.append(restored_card)
+		if not _drawn_cards.is_empty():
+			_battle_reward_multiplier = GameState.get_battle_reward_multiplier(_drawn_cards)
+			_actually_launch_battle()
+			return
 
 	# Build pool for manual card selection
 	var mixed_pool := CardPoolRef.get_mixed_pool(current_stage_index)
@@ -95,6 +105,7 @@ func _launch_battle(is_boss: bool) -> void:
 func _on_cards_confirmed(cards: Array) -> void:
 	_drawn_cards = cards
 	_battle_reward_multiplier = GameState.get_battle_reward_multiplier(cards)
+	GameState.capture_battle_entry(cards)
 	_actually_launch_battle()
 
 func _actually_launch_battle() -> void:
@@ -129,6 +140,7 @@ func _launch_event() -> void:
 		inst.set_parent_flow(self)
 
 func _on_node_completed(_type: String) -> void:
+	GameState.clear_battle_entry()
 	var was_elite: bool = false
 	for card in _drawn_cards:
 		if card and card.rarity == CardData.Rarity.UNKNOWN:

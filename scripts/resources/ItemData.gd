@@ -43,7 +43,7 @@ static func get_consumable_pool() -> Array:
 		make("reroll_stone", "重摇石", "重摇自己任意数量骰子", Rarity.COMMON, ItemType.CONSUMABLE, 10),
 		make("freeze_die", "定格骰", "指定一颗骰子，下一轮固定为选定点数", Rarity.RARE, ItemType.CONSUMABLE, 30),
 		make("split_die", "裂变骰", "选择≥4点骰子，裂变为点数之和相等的两颗骰子", Rarity.RARE, ItemType.CONSUMABLE, 35),
-		make("full_reroll", "全重摇", "五颗骰子全部重摇", Rarity.COMMON, ItemType.CONSUMABLE, 12),
+		make("full_reroll", "全重摇", "重新投掷自己当前拥有的全部骰子", Rarity.COMMON, ItemType.CONSUMABLE, 12),
 		make("clone_die", "克隆骰", "有对子时，复制一颗变三颗同点数", Rarity.RARE, ItemType.CONSUMABLE, 28),
 		make("flip_die", "翻转骰", "翻转一颗骰子(1↔6,2↔5,3↔4)", Rarity.COMMON, ItemType.CONSUMABLE, 10),
 		make("pair_fix", "保底对", "无对子时将最低点骰子变为当前最高点", Rarity.RARE, ItemType.CONSUMABLE, 25),
@@ -59,7 +59,7 @@ static func get_consumable_pool() -> Array:
 		make("royal_pardon", "国王赦免", "下一次致死同化改为存活并消耗", Rarity.LEGENDARY, ItemType.CONSUMABLE, 80),
 		make("gambler_hunch", "赌徒直觉", "提示区显示全桌最多的点数", Rarity.COMMON, ItemType.CONSUMABLE, 10),
 		make("borrow_die", "借骰", "选定一个对手，复制其1颗可见骰子", Rarity.COMMON, ItemType.CONSUMABLE, 12),
-		make("payout", "清算", "直接获得50金币", Rarity.COMMON, ItemType.CONSUMABLE, 8),
+		make("payout", "清算", "直接获得15金币", Rarity.COMMON, ItemType.CONSUMABLE, 8),
 		make("rig_dice", "虚张声势", "自己两颗骰子变为①", Rarity.LEGENDARY, ItemType.CONSUMABLE, 55),
 		make("sabotage", "算力超频", "选定一个对手，两颗骰子变为①", Rarity.LEGENDARY, ItemType.CONSUMABLE, 50),
 	]

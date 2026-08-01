@@ -10,7 +10,10 @@ func _ready() -> void:
 	_test_dynamic_candidates()
 	_test_pair_fix()
 	_test_fragment_inventory()
-	_test_five_stage_curve()
+	_test_three_stage_curve()
+	_test_upgrade_migration()
+	_test_battle_entry_snapshot()
+	_test_ai_probability_logic()
 	_test_growth_curse()
 	await _test_duplicate_dealers()
 	await _test_boss_dealer()
@@ -55,20 +58,64 @@ func _test_fragment_inventory() -> void:
 	assert(GameState.boss_fragments.size() == BossFragmentDataScript.MAX_FRAGMENTS)
 	assert(GameState.replace_boss_fragment(0, "referee"))
 	assert(GameState.boss_fragments == ["referee", "lucky_one"])
+	assert(GameState.add_boss_fragment("dice_god") == "invalid", "骰子之神不能产出碎片")
 
-func _test_five_stage_curve() -> void:
-	GameState.card_levels["jack_crt"] = 5
-	GameState.purchased_card_levels["jack_crt"] = 5
-	assert(GameState.get_max_level_for_card("jack_crt") == 5)
+func _test_three_stage_curve() -> void:
+	GameState.card_levels["jack_crt"] = 3
+	GameState.purchased_card_levels["jack_crt"] = 3
+	assert(GameState.get_max_level_for_card("jack_crt") == 3)
 	assert(GameState.get_max_level_for_card("dealer") == 0)
-	assert(DiceGameScript.get_rust_start_dice_bonus(2) == 0)
-	assert(DiceGameScript.get_rust_start_dice_bonus(3) == 1)
-	assert(DiceGameScript.get_rust_start_dice_bonus(4) == 2)
-	assert(DiceGameScript.get_rust_start_dice_bonus(5) == 4)
 	var jack = CardDataScript.get_card_by_id("jack_crt")
-	assert(is_equal_approx(GameState.get_battle_reward_multiplier([jack]), 1.5))
+	assert(is_equal_approx(GameState.get_battle_reward_multiplier([jack]), 1.22))
 	GameState.card_levels["jack_crt"] = 0
 	GameState.purchased_card_levels["jack_crt"] = 0
+
+func _test_upgrade_migration() -> void:
+	var old_points: int = GameState.rust_points
+	GameState.rust_points = 0
+	GameState.card_levels["jack_crt"] = 5
+	GameState.purchased_card_levels["jack_crt"] = 5
+	assert(GameState._migrate_three_level_upgrades())
+	assert(GameState.card_levels["jack_crt"] == 3 and GameState.purchased_card_levels["jack_crt"] == 3)
+	assert(GameState.rust_points == 9, "移除Lv.4和Lv.5应返还4+5点")
+	GameState.card_levels["jack_crt"] = 0
+	GameState.purchased_card_levels["jack_crt"] = 0
+	GameState.rust_points = old_points
+
+func _test_battle_entry_snapshot() -> void:
+	var jack = CardDataScript.get_card_by_id("jack_crt")
+	var warrior = CardDataScript.get_card_by_id("rust_warrior")
+	GameState.gold = 37
+	GameState.assimilation_count = 1
+	GameState.consumable_items.assign(["payout", "full_reroll"])
+	GameState.boss_fragments.assign(["lucky_one"])
+	GameState.capture_battle_entry([jack, warrior])
+	GameState.gold = 999
+	GameState.assimilation_count = 2
+	GameState.consumable_items.clear()
+	GameState.boss_fragments.clear()
+	GameState._restore_battle_entry(GameState._battle_entry_snapshot)
+	assert(GameState.gold == 37 and GameState.assimilation_count == 1)
+	assert(GameState.consumable_items == ["payout", "full_reroll"])
+	assert(GameState.boss_fragments == ["lucky_one"])
+	assert(GameState.saved_battle_card_ids == ["jack_crt", "rust_warrior"])
+	GameState.clear_battle_entry()
+	GameState.assimilation_count = 0
+	GameState.consumable_items.clear()
+	GameState.boss_fragments.clear()
+
+func _test_ai_probability_logic() -> void:
+	var ai_script := preload("res://scripts/ai/AiController.gd")
+	var cup = DiceCupScript.new(5)
+	for i in range(5): cup.dice[i].value = 2
+	var ai = ai_script.new(CardDataScript.get_card_by_id("jack_crt"), cup)
+	ai.total_other_dice = 10
+	var strong: float = ai.estimate_bid_truth_probability(6, 2, cup.get_values())
+	var reckless: float = ai.estimate_bid_truth_probability(13, 5, cup.get_values())
+	assert(strong > reckless, "AI必须根据己方骰子与未知骰子的概率区分可靠叫牌和冒险叫牌")
+	ai.current_bid_count = 6; ai.current_bid_value = 2
+	var bid: Dictionary = ai.make_bid()
+	assert(int(bid.count) <= 9, "没有充分证据时AI不应一次把数量抬得过大")
 
 func _test_growth_curse() -> void:
 	var game = DiceGameScript.new()
@@ -118,8 +165,8 @@ func _test_boss_dealer() -> void:
 	GameState.assimilation_count = 0
 	GameState.boss_fragments.clear()
 	game.start_game(commons[0], commons[1], false, dealer, true)
-	assert(game.ai_cup_3.dice.size() == 10, "Boss庄家应以10骰开局")
-	assert(game.get_min_opening() == 7, "Boss庄家存活时四人最低起叫应为7")
+	assert(game.ai_cup_3.dice.size() == 9, "Boss庄家应在普通庄家的8骰上额外+1")
+	assert(game.get_min_opening() == 5, "四人存活时最低起叫应为人数+1，即5")
 	game.game_active = false
 	await get_tree().create_timer(4.0).timeout
 	for ctrl in [game.ai_controller_1, game.ai_controller_2, game.ai_controller_3]:

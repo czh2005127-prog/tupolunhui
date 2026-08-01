@@ -1603,9 +1603,9 @@ func _use_consumable_item(item_id: String) -> void:
 			_log_event("赌徒直觉: 全桌最多点数 %d" % best_val)
 			if status_label: status_label.text = "全桌最多点数: %d" % best_val
 		"payout":
-			GameState.add_gold(50)
+			GameState.add_gold(15)
 			GameState.use_consumable(item_id)
-			if status_label: status_label.text = "+50 点数!"
+			if status_label: status_label.text = "+15 金币!"
 		"rig_dice":
 			# Select 2 dice to set to 1
 			_enter_selection_mode(item_id)
@@ -1829,9 +1829,14 @@ func _on_peek_opponent(ai_id: String) -> void:
 		_on_peek_all_dice(ai_id)
 		return
 	if _selection_mode_type == "sabotage":
-		game_ctrl.sabotage_enemy_dice(ai_id)
+		if not game_ctrl.sabotage_enemy_dice(ai_id):
+			if status_label: status_label.text = "对手仅剩1颗骰子，无法使用算力超频"
+			_exit_peek_mode()
+			_item_locked = false
+			return
 		GameState.use_consumable(_active_item_id)
 		game_ctrl.mirror_item("sabotage")
+		if _notify_label: _notify_label.text = "%s 有2颗骰子已变为①" % game_ctrl.get_ai_name_for_id(ai_id)
 		_exit_peek_mode()
 		_update_dice_display()
 		return
