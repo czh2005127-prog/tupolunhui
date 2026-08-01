@@ -745,15 +745,24 @@ func load_progress() -> void:
 	rust_points = f.get_32()
 	card_levels.clear()
 	var cl_count: int = f.get_32()
+	if not _is_valid_progress_count(f, cl_count):
+		_recover_corrupt_progress(f, "card_levels")
+		return
 	for _i in range(cl_count):
 		var cid: String = f.get_pascal_string()
 		card_levels[cid] = f.get_32()
 	unlocked_cards.clear()
 	var uc_count: int = f.get_32()
+	if not _is_valid_progress_count(f, uc_count):
+		_recover_corrupt_progress(f, "unlocked_cards")
+		return
 	for _i in range(uc_count):
 		unlocked_cards.append(f.get_pascal_string())
 	unlocked_items.clear()
 	var ui_count: int = f.get_32()
+	if not _is_valid_progress_count(f, ui_count):
+		_recover_corrupt_progress(f, "unlocked_items")
+		return
 	for _i in range(ui_count):
 		unlocked_items.append(f.get_pascal_string())
 	tutorial_enabled = f.get_32() == 1
@@ -763,6 +772,9 @@ func load_progress() -> void:
 	purchased_card_levels.clear()
 	if f.get_position() < f.get_length():
 		var purchased_count: int = f.get_32()
+		if not _is_valid_progress_count(f, purchased_count):
+			_recover_corrupt_progress(f, "purchased_card_levels")
+			return
 		for _i in range(purchased_count):
 			purchased_card_levels[f.get_pascal_string()] = f.get_32()
 	else:
@@ -772,21 +784,49 @@ func load_progress() -> void:
 	selected_forbidden_rules.clear()
 	if f.get_position() < f.get_length():
 		var forbidden_count: int = f.get_32()
+		if not _is_valid_progress_count(f, forbidden_count):
+			_recover_corrupt_progress(f, "selected_forbidden_rules")
+			return
 		for _i in range(forbidden_count):
 			if f.get_position() < f.get_length(): selected_forbidden_rules.append(f.get_pascal_string())
 	if f.get_position() < f.get_length(): tutorial_shop_seen = f.get_32() == 1
 	tutorial_seen_topics.clear()
 	if f.get_position() < f.get_length():
 		var topic_count: int = f.get_32()
+		if not _is_valid_progress_count(f, topic_count):
+			_recover_corrupt_progress(f, "tutorial_seen_topics")
+			return
 		for _i in range(topic_count):
 			if f.get_position() < f.get_length(): tutorial_seen_topics.append(f.get_pascal_string())
 	f.close()
+	_finalize_loaded_progress(false)
+
+func _is_valid_progress_count(file: FileAccess, count: int) -> bool:
+	const MAX_SERIALIZED_ENTRIES := 512
+	var remaining_bytes: int = file.get_length() - file.get_position()
+	return count >= 0 and count <= MAX_SERIALIZED_ENTRIES and count <= remaining_bytes / 4
+
+func _recover_corrupt_progress(file: FileAccess, section: String) -> void:
+	push_warning("Progress data is damaged near '%s'; keeping readable progress and repairing the file." % section)
+	file.close()
+	_finalize_loaded_progress(true)
+
+func _finalize_loaded_progress(force_save: bool) -> void:
+	var removed_invalid_ids: bool = false
+	for raw_id in card_levels.keys():
+		if CardData.get_card_by_id(str(raw_id)) == null:
+			card_levels.erase(raw_id)
+			removed_invalid_ids = true
+	for raw_id in purchased_card_levels.keys():
+		if CardData.get_card_by_id(str(raw_id)) == null:
+			purchased_card_levels.erase(raw_id)
+			removed_invalid_ids = true
 	var upgrade_data_migrated: bool = _migrate_three_level_upgrades()
 	# Rebuild all level-based unlocks so older saves with an empty card list migrate safely.
 	for level in range(1, player_level + 1):
 		_apply_unlock(level)
 	_ensure_starter_items()
-	if upgrade_data_migrated:
+	if force_save or removed_invalid_ids or upgrade_data_migrated:
 		save_progress()
 
 func _migrate_three_level_upgrades() -> bool:
