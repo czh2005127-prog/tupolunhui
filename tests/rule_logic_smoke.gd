@@ -15,6 +15,7 @@ const EventUIScript := preload("res://scripts/ui/EventUI.gd")
 
 func _ready() -> void:
 	GameState.tutorial_completed = true
+	_test_all_project_scripts_load()
 	_test_dynamic_candidates()
 	_test_card_draw_runtime_types()
 	_test_pair_fix()
@@ -43,6 +44,19 @@ func _ready() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	get_tree().quit(0)
+
+func _test_all_project_scripts_load() -> void:
+	var script_paths: Array[String] = []
+	_collect_script_paths("res://scripts", script_paths)
+	for script_path in script_paths:
+		assert(ResourceLoader.load(script_path) != null, "项目脚本无法加载: %s" % script_path)
+
+func _collect_script_paths(directory: String, output: Array[String]) -> void:
+	for file_name in DirAccess.get_files_at(directory):
+		if file_name.ends_with(".gd"):
+			output.append(directory.path_join(file_name))
+	for child_directory in DirAccess.get_directories_at(directory):
+		_collect_script_paths(directory.path_join(child_directory), output)
 
 func _test_dynamic_candidates() -> void:
 	GameState.unlocked_cards.clear()

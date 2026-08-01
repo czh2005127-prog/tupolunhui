@@ -3,6 +3,8 @@
 class_name ItemSlot
 extends Control
 
+const GameButtonScript := preload("res://scripts/ui/components/GameButton.gd")
+
 signal item_hovered(item_id: String, desc: String)
 signal item_used(item_id: String)
 signal item_unhovered
@@ -13,7 +15,7 @@ var item_desc: String = ""
 var rarity_color: Color = UITheme.RARITY_COMMON
 
 var _name_label: Label
-var _use_btn: GameButton
+var _use_btn: ColorRect
 var _bg: ColorRect
 
 static func create(parent: Control, pos: Vector2, size: Vector2) -> ItemSlot:
@@ -32,7 +34,7 @@ static func create(parent: Control, pos: Vector2, size: Vector2) -> ItemSlot:
 	slot._name_label = UITheme.label(slot, "空", Vector2(UITheme.SPACING_MD, 6), Vector2(size.x - 56, 20), UITheme.TEXT_DIM, UITheme.FONT_CAPTION)
 
 	# "用" button (positioned at right edge)
-	slot._use_btn = GameButton.create(slot, Vector2(size.x - 44, 4), Vector2(36, 24), "用", UITheme.BLUE, func(): slot.item_used.emit(slot.item_id))
+	slot._use_btn = GameButtonScript.create(slot, Vector2(size.x - 44, 4), Vector2(36, 24), "用", UITheme.BLUE, func(): slot.item_used.emit(slot.item_id))
 	slot._use_btn.visible = false
 
 	# Hover detection
