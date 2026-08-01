@@ -296,7 +296,12 @@ func _flip_content(rect: ColorRect) -> void:
 	var sk_lbl := _lbl(card.skill_name, Vector2(6, 168), Vector2(rect.size.x - 12, 22), acc, 11)
 	sk_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; rect.add_child(sk_lbl)
 
-	var skd_lbl := _lbl(card.skill_desc, Vector2(6, 188), Vector2(rect.size.x - 12, 24), Color(0.4, 0.4, 0.4), 8)
+	var shown_desc: String = card.skill_desc
+	if _is_boss and _boss_phase == "boss":
+		var boss_info := preload("res://scripts/resources/BossFragmentData.gd").get_info(card.card_id)
+		if not boss_info.is_empty():
+			shown_desc += "\nBoss：" + str(boss_info.get("boss_name", "强化"))
+	var skd_lbl := _lbl(shown_desc, Vector2(6, 184), Vector2(rect.size.x - 12, 34), Color(0.4, 0.4, 0.4), 8)
 	skd_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	skd_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rect.add_child(skd_lbl)

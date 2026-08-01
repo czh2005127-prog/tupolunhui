@@ -706,7 +706,7 @@ func _connect_all() -> void:
 	# Buttons already connected via _make_btn_at — no extra gui_input needed
 
 	EventBus.gold_changed.connect(_refresh_points)
-	EventBus.half_assimilated.connect(_refresh_virus)
+	EventBus.half_assimilated.connect(_on_half_assimilated)
 	EventBus.card_skill_triggered.connect(_on_card_skill_triggered)
 	EventBus.hint_show.connect(_on_hint_show)
 	EventBus.discard_prompt.connect(_on_discard_prompt)
@@ -778,7 +778,9 @@ func setup_with_flow(stage: Resource, flow: Node, param3: Variant = null) -> voi
 	if is_boss_actual:
 		if _opp_bg3: _opp_bg3.visible = true
 		if opponent_label3: opponent_label3.text = card3.card_name
-		if _sk_label3: _sk_label3.text = "技能：「%s」" % card3.skill_name
+		if _sk_label3:
+			var boss_skill_name: String = preload("res://scripts/resources/BossFragmentData.gd").get_boss_skill_name(card3.card_id)
+			_sk_label3.text = "技能：「%s」+「%s」" % [card3.skill_name, boss_skill_name]
 		_paint_card_to_bg(_opp_bg3, card3)
 	else:
 		if _opp_bg3: _opp_bg3.visible = false
@@ -788,6 +790,8 @@ func setup_with_flow(stage: Resource, flow: Node, param3: Variant = null) -> voi
 	_bid_count = game_ctrl.get_min_opening()
 	_bid_value = 2
 	_refresh_adjust_labels()
+	if GameState.assimilation_count == 1 and GameState.assimilation_curse.is_empty():
+		call_deferred("_show_assimilation_choice")
 	# NOTE: do NOT call _show_actions(false) here!
 	# _on_round_started and _on_turn_changed handle visibility via signals
 
@@ -1130,7 +1134,9 @@ func _on_game_over(winner: String) -> void:
 			status_label.text = "你赢了!"
 		# 追踪：击败敌人计数
 		GameState.enemies_defeated_this_run += 1
-		GameState._pending_xp += (GameState.XP_PER_BOSS if _is_boss_match else GameState.XP_PER_ENEMY)
+		var base_xp: int = GameState.XP_PER_BOSS if _is_boss_match else GameState.XP_PER_ENEMY
+		var reward_multiplier: float = GameState.get_battle_reward_multiplier(_drawn_cards)
+		GameState._pending_xp += maxi(base_xp, floori(base_xp * reward_multiplier))
 		_show_actions(false)
 		# Rewards are resolved centrally by GameFlow.
 		_show_victory_screen(false)
@@ -2084,6 +2090,44 @@ func _refresh_virus(_target: String = "") -> void:
 			if child is ColorRect and child.name == "VirusSquare" + str(i):
 				child.color = dead if cnt >= i + 1 else dark
 				break
+
+func _on_half_assimilated() -> void:
+	_refresh_virus()
+	call_deferred("_show_assimilation_choice")
+
+func _show_assimilation_choice() -> void:
+	if GameState.assimilation_count != 1 or not GameState.assimilation_curse.is_empty(): return
+	if find_child("AssimilationChoiceOverlay", false, false): return
+	var overlay := ColorRect.new()
+	overlay.name = "AssimilationChoiceOverlay"
+	overlay.position = Vector2.ZERO; overlay.size = Vector2(1280, 720)
+	overlay.color = Color(0.08, 0.01, 0.08, 0.96)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 600
+	add_child(overlay)
+	var title := Label.new()
+	title.text = "半同化：选择一种诅咒能力"
+	title.position = Vector2(260, 80); title.size = Vector2(760, 50)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", Color(0.85, 0.45, 0.95))
+	overlay.add_child(title)
+	var choices: Array[Dictionary] = [
+		{"id": "double_wild", "name": "双重万能", "desc": "③也可作万能骰，但你不能叫①或③"},
+		{"id": "growth_cost", "name": "增殖代价", "desc": "每轮+1骰；随机一颗①变为②～⑥"},
+		{"id": "devour_challenge", "name": "吞噬质疑", "desc": "质疑成功吞1骰；质疑失败立即完全同化"},
+	]
+	for i in range(choices.size()):
+		var choice: Dictionary = choices[i]
+		var button := Button.new()
+		button.text = "%s\n%s" % [choice.name, choice.desc]
+		button.position = Vector2(155 + i * 335, 250); button.size = Vector2(300, 130)
+		button.add_theme_font_size_override("font_size", 16)
+		button.pressed.connect(func(curse_id: String = choice.id):
+			if GameState.choose_assimilation_curse(curse_id):
+				EventBus.hint_show.emit("半同化能力已选择：%s" % choice.name, 4.0, Color(0.85, 0.45, 0.95))
+			overlay.queue_free())
+		overlay.add_child(button)
 
 func set_infection_notice(virus_count: int) -> void:
 	if status_label:

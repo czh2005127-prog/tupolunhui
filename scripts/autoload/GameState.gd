@@ -4,6 +4,7 @@ extends Node
 
 const ItemData := preload("res://scripts/resources/ItemData.gd")
 const CardData := preload("res://scripts/resources/CardData.gd")
+const BossFragmentData := preload("res://scripts/resources/BossFragmentData.gd")
 
 # Player state
 var gold: int = 0
@@ -14,6 +15,8 @@ const MAX_ASSIMILATION: int = 2
 var current_stage: int = 0
 var current_node_index: int = 0
 var stages_cleared: Array[int] = []
+var boss_fragments: Array[String] = []
+var assimilation_curse: String = ""
 
 # Run stats
 var total_assimilations: int = 0
@@ -190,9 +193,58 @@ func assimilate() -> void:
 func clear_assimilation() -> void:
 	assimilation_count = 0
 	persistent_virus = 0
+	assimilation_curse = ""
 
 func is_half_assimilated() -> bool:
 	return assimilation_count >= 1
+
+func choose_assimilation_curse(curse_id: String) -> bool:
+	if assimilation_count != 1 or curse_id not in ["double_wild", "growth_cost", "devour_challenge"]:
+		return false
+	assimilation_curse = curse_id
+	return true
+
+func has_boss_fragment(card_id: String) -> bool:
+	return card_id in boss_fragments
+
+## Returns added, duplicate, or full. Full leaves inventory unchanged until UI resolves it.
+func add_boss_fragment(card_id: String) -> String:
+	if not BossFragmentData.has_definition(card_id):
+		return "invalid"
+	if card_id in boss_fragments:
+		return "duplicate"
+	if boss_fragments.size() >= BossFragmentData.MAX_FRAGMENTS:
+		return "full"
+	boss_fragments.append(card_id)
+	_apply_fragment_acquisition_reward(card_id)
+	return "added"
+
+func replace_boss_fragment(old_index: int, new_card_id: String) -> bool:
+	if old_index < 0 or old_index >= boss_fragments.size() or not BossFragmentData.has_definition(new_card_id):
+		return false
+	if new_card_id in boss_fragments:
+		return false
+	boss_fragments[old_index] = new_card_id
+	_apply_fragment_acquisition_reward(new_card_id)
+	return true
+
+func _apply_fragment_acquisition_reward(card_id: String) -> void:
+	if card_id == "dice_god":
+		add_rust_points(3)
+		_pending_xp += 50
+
+func get_battle_reward_multiplier(cards: Array) -> float:
+	if cards.is_empty():
+		return 1.0
+	const LEVEL_MULTIPLIERS: Array[float] = [1.0, 1.05, 1.12, 1.22, 1.35, 1.50]
+	var bonus_sum: float = 0.0
+	var counted: int = 0
+	for card in cards:
+		if card == null: continue
+		var level: int = clampi(get_card_level(card.card_id), 0, 5)
+		bonus_sum += LEVEL_MULTIPLIERS[level] - 1.0
+		counted += 1
+	return 1.0 + (bonus_sum / float(counted)) if counted > 0 else 1.0
 
 func add_consumable_item(item_id: String) -> bool:
 	if consumable_items.size() < MAX_CONSUMABLE:
@@ -253,7 +305,7 @@ func upgrade_card(card_id: String) -> bool:
 		return true
 	if purchased >= max_level:
 		return false
-	var cost: int = get_upgrade_cost_for_rarity(card.rarity)
+	var cost: int = purchased + 1
 	if rust_points < cost:
 		return false
 	rust_points -= cost
@@ -283,7 +335,8 @@ func get_purchased_card_level(card_id: String) -> int:
 func get_next_card_level_cost(card_id: String) -> int:
 	var card := CardData.get_card_by_id(card_id)
 	if card == null: return 0
-	return 0 if get_card_level(card_id) < get_purchased_card_level(card_id) else get_upgrade_cost_for_rarity(card.rarity)
+	var purchased: int = get_purchased_card_level(card_id)
+	return 0 if get_card_level(card_id) < purchased else mini(5, purchased + 1)
 
 func get_max_level_for_card(card_id: String) -> int:
 	return _get_max_level(card_id)
@@ -301,18 +354,12 @@ func _get_upgrade_cost(rarity: int) -> int:
 		CardData.Rarity.UNKNOWN: return 5
 	return 1
 
-## Max levels per card (from design doc)
+## Max levels per card (five-stage curve; explicitly non-upgradable cards remain at zero)
 func _get_max_level(card_id: String) -> int:
 	var no_upgrade := ["two_face", "mirror_tech", "dealer", "dice_god", "unknown_mirror", "unknown_chaos", "unknown_abyss"]
 	if card_id in no_upgrade:
 		return 0
-	var lv1_max := ["alliance_oled"]
-	if card_id in lv1_max:
-		return 1
-	var lv2_max := ["table_ghost", "prophet"]
-	if card_id in lv2_max:
-		return 2
-	return 3
+	return 5
 
 ## Rust points for this run
 func get_run_rust_points() -> int:
@@ -334,6 +381,8 @@ func setup_new_run() -> void:
 	final_stage_reached = 0
 	final_node_reached = 0
 	consumable_items.clear()
+	boss_fragments.clear()
+	assimilation_curse = ""
 	shop_items.clear()
 	_debug_jump_boss = false
 	persistent_virus = 0
@@ -386,6 +435,10 @@ func save_run(_dice_game_virus: int = 0, temporarily_disabled_items: Array = [],
 	f.store_32(1 if next_battle_fixed_six or bool(restart_modifiers.get("fixed_six", false)) else 0)
 	f.store_32(maxi(next_boss_dice_penalty, int(restart_modifiers.get("boss_dice_penalty", 0))))
 	f.store_32(1 if next_boss_start_assimilated else 0)
+	f.store_32(boss_fragments.size())
+	for fragment_id in boss_fragments:
+		f.store_pascal_string(fragment_id)
+	f.store_pascal_string(assimilation_curse)
 	f.close()
 
 func has_saved_game() -> bool:
@@ -414,6 +467,12 @@ func load_run() -> bool:
 	if f.get_position() < f.get_length(): next_battle_fixed_six = f.get_32() == 1
 	if f.get_position() < f.get_length(): next_boss_dice_penalty = f.get_32()
 	if f.get_position() < f.get_length(): next_boss_start_assimilated = f.get_32() == 1
+	boss_fragments.clear()
+	if f.get_position() < f.get_length():
+		var fragment_count: int = f.get_32()
+		for _i in range(fragment_count):
+			if f.get_position() < f.get_length(): boss_fragments.append(f.get_pascal_string())
+	if f.get_position() < f.get_length(): assimilation_curse = f.get_pascal_string()
 	f.close()
 	return true
 

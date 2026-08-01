@@ -2,8 +2,11 @@
 ## V2: Linear progression, no map, shop after every regular battle.
 extends Control
 
+signal fragment_choice_resolved
+
 enum NodeType { DICE, EVENT, BOSS }
 const CardPoolRef = preload("res://scripts/cards/CardPool.gd")
+const BossFragmentDataRef = preload("res://scripts/resources/BossFragmentData.gd")
 
 var stages: Array = []
 var current_stage_index: int = 0
@@ -13,6 +16,7 @@ var _skip_to_boss: bool = false
 var _drawn_cards: Array = []
 var _is_boss_node: bool = false
 var _battle_gold: int = 0
+var _battle_reward_multiplier: float = 1.0
 
 func _ready() -> void:
 	_build_stages()
@@ -90,6 +94,7 @@ func _launch_battle(is_boss: bool) -> void:
 ## Called by CardDrawUI when player confirms selected cards
 func _on_cards_confirmed(cards: Array) -> void:
 	_drawn_cards = cards
+	_battle_reward_multiplier = GameState.get_battle_reward_multiplier(cards)
 	_actually_launch_battle()
 
 func _actually_launch_battle() -> void:
@@ -131,7 +136,7 @@ func _on_node_completed(_type: String) -> void:
 			break
 	# If this was a regular battle, launch shop automatically
 	if not _is_boss_node and nodes_this_stage[current_node_index] == NodeType.DICE:
-		GameState.add_gold(_battle_gold)
+		GameState.add_gold(maxi(_battle_gold, floori(_battle_gold * _battle_reward_multiplier)))
 		if was_elite:
 			if not GameState.add_consumable_item(CardPoolRef.get_elite_item()):
 				await EventBus.discard_resolved
@@ -147,7 +152,7 @@ func _on_node_completed(_type: String) -> void:
 
 	# Boss: give legendary item
 	if _is_boss_node:
-		GameState.add_gold(_battle_gold)
+		GameState.add_gold(maxi(_battle_gold, floori(_battle_gold * _battle_reward_multiplier)))
 		var leg_item: String = CardPoolRef.get_legendary_item()
 		if not GameState.add_consumable_item(leg_item):
 			await EventBus.discard_resolved
@@ -169,6 +174,10 @@ func _on_node_completed(_type: String) -> void:
 		if rp > 0:
 			GameState.add_rust_points(rp)
 			GameState.save_progress()
+		if not _drawn_cards.is_empty():
+			var boss_card = _drawn_cards.back()
+			if boss_card and BossFragmentDataRef.has_definition(boss_card.card_id):
+				await _award_boss_fragment(boss_card.card_id)
 
 	# Advance
 	current_node_index += 1
@@ -194,6 +203,58 @@ func _on_shop_exited() -> void:
 	else:
 		await _show_corridor()
 		_run_node(nodes_this_stage[current_node_index])
+
+func _award_boss_fragment(card_id: String) -> void:
+	var result: String = GameState.add_boss_fragment(card_id)
+	var fragment_name: String = BossFragmentDataRef.get_fragment_name(card_id)
+	if result == "added":
+		EventBus.hint_show.emit("获得Boss碎片：%s" % fragment_name, 4.0, Color(0.98, 0.78, 0.29))
+		return
+	if result == "duplicate":
+		EventBus.hint_show.emit("已持有%s，同名碎片不叠加" % fragment_name, 3.0, Color(0.72, 0.72, 0.78))
+		return
+	if result != "full":
+		return
+	var overlay := ColorRect.new()
+	overlay.name = "FragmentReplaceOverlay"
+	overlay.position = Vector2.ZERO
+	overlay.size = Vector2(1280, 720)
+	overlay.color = Color(0.01, 0.01, 0.02, 0.94)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 500
+	add_child(overlay)
+	var title := Label.new()
+	title.text = "Boss碎片已满"
+	title.position = Vector2(340, 100); title.size = Vector2(600, 48)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", Color(0.98, 0.78, 0.29))
+	overlay.add_child(title)
+	var desc := Label.new()
+	desc.text = "新碎片：%s\n%s\n\n选择要替换的碎片，或丢弃新碎片。" % [fragment_name, BossFragmentDataRef.get_fragment_desc(card_id)]
+	desc.position = Vector2(290, 165); desc.size = Vector2(700, 110)
+	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.add_theme_font_size_override("font_size", 17)
+	overlay.add_child(desc)
+	for i in range(GameState.boss_fragments.size()):
+		var old_id: String = GameState.boss_fragments[i]
+		var button := Button.new()
+		button.text = "替换 %s" % BossFragmentDataRef.get_fragment_name(old_id)
+		button.position = Vector2(300 + i * 350, 330); button.size = Vector2(280, 54)
+		button.pressed.connect(func(index: int = i):
+			GameState.replace_boss_fragment(index, card_id)
+			overlay.queue_free()
+			fragment_choice_resolved.emit())
+		overlay.add_child(button)
+	var discard := Button.new()
+	discard.text = "丢弃 %s" % fragment_name
+	discard.position = Vector2(500, 430); discard.size = Vector2(280, 54)
+	discard.pressed.connect(func():
+		overlay.queue_free()
+		fragment_choice_resolved.emit())
+	overlay.add_child(discard)
+	await fragment_choice_resolved
 
 func _show_intro() -> void:
 	var overlay := Control.new()

@@ -12,6 +12,7 @@ signal boss_mode_changed(is_boss: bool)
 signal boss_skill_effect(effect: String, detail: String)
 
 var forbidden_number: int = 0
+var boss_forbidden_number: int = 0
 var infectious_number: int = 0
 var _pending_dice: Dictionary = {}  # 加骰队列 {target_id: count}
 var player_shield: bool = false  # 赌桌幽灵: 免疫下一次伤害
@@ -53,6 +54,11 @@ var _chaos_bids_by_ai: Dictionary = {}  # ai_id -> {real, fake}
 var _casino_see_all_ais: Array[String] = []
 var _ai_fate_effects: Dictionary = {}  # ai_id -> {index, value, rounds_left}
 var _skip_ai_turns: Dictionary = {}  # ai_id -> pending skipped turns
+var _boss_card_id: String = ""
+var _boss_ai_id: String = ""
+var _boss_referee_shield_used: bool = false
+var _fragment_referee_used: bool = false
+var _fragment_ghost_used: bool = false
 
 const SELF_ONLY_ITEM_IDS: Array[String] = [
 	"reroll_stone", "full_reroll", "flip_die", "freeze_die",
@@ -78,7 +84,10 @@ var _fate_rounds_left: int = 0
 func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, card3: Resource = null, _is_boss: bool = false) -> void:
 	_bonus_dice = GameState.get_bonus_dice_count()
 	is_boss_mode = _is_boss
-	var total: int = 5 + _bonus_dice
+	_boss_card_id = card3.card_id if is_boss_mode and card3 else ""
+	_boss_ai_id = "ai3" if not _boss_card_id.is_empty() else ""
+	var fragment_start_dice: int = 1 if GameState.has_boss_fragment("dealer") else 0
+	var total: int = 5 + _bonus_dice + fragment_start_dice
 	player_cup = preload("res://scripts/dice/DiceCup.gd").new(total)
 	ai_cup_1 = preload("res://scripts/dice/DiceCup.gd").new(5)
 	ai_cup_2 = preload("res://scripts/dice/DiceCup.gd").new(5)
@@ -100,6 +109,12 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 	else:
 		ai_controller_3 = null
 		ai3_virus = AI_MAX_VIRUS  # dead by default in non-boss mode
+	for ai_setup in [[card1, ai_cup_1], [card2, ai_cup_2], [card3, ai_cup_3]]:
+		if ai_setup[0] == null: continue
+		var rust_level: int = GameState.get_card_level(ai_setup[0].card_id)
+		var rust_bonus: int = get_rust_start_dice_bonus(rust_level)
+		for _i in range(rust_bonus):
+			ai_setup[1].add_die()
 	if is_boss_mode and GameState.next_boss_dice_penalty > 0:
 		_boss_dice_penalty_applied = GameState.next_boss_dice_penalty
 		for cup: RefCounted in [ai_cup_1, ai_cup_2, ai_cup_3]:
@@ -126,6 +141,7 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 	_challenge_immunity_until.clear()
 	_card_ais.clear(); _referee_uses.clear(); _chamberlain_items_by_ai.clear()
 	_chaos_bids_by_ai.clear(); _casino_see_all_ais.clear(); _ai_fate_effects.clear(); _skip_ai_turns.clear()
+	_boss_referee_shield_used = false; _fragment_referee_used = false; _fragment_ghost_used = false
 	for ai_info in [["ai1", card1], ["ai2", card2], ["ai3", card3]]:
 		if ai_info[1] == null: continue
 		var ai_id: String = ai_info[0]
@@ -137,7 +153,7 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 		if detected_card_id == "unknown_chaos": EventBus.hint_show.emit("混沌·乱码: 它的叫牌可能被篡改", 4.0, Color(0.85, 0.6, 0.2))
 		if detected_card_id == "recycler": var rec_lv_hint: int = 2 if GameState.get_card_level("recycler") >= 1 else 1; EventBus.hint_show.emit("回收商·捡骰: 有人质疑失败时+%d骰" % rec_lv_hint, 4.0, Color(0.52, 0.72, 0.92))
 		if detected_card_id == "lucky_one": var lucky_hint: int = 2 if GameState.get_card_level("lucky_one") >= 1 else 1; EventBus.hint_show.emit("幸运儿·骰神眷顾: 永远多%d个①" % lucky_hint, 4.0, Color(0.98, 0.78, 0.29))
-		if detected_card_id == "referee": _referee_uses[ai_id] = 0; var rrlv: int = GameState.get_card_level("referee"); EventBus.hint_show.emit("裁判长·强制执行: 本局可用%d次" % maxi(1, rrlv), 4.0, Color(0.98, 0.78, 0.29))
+		if detected_card_id == "referee": _referee_uses[ai_id] = 0; var rrlv: int = GameState.get_card_level("referee"); EventBus.hint_show.emit("裁判长·强制执行: 本局可用%d次" % clampi(rrlv, 1, 3), 4.0, Color(0.98, 0.78, 0.29))
 		if detected_card_id == "mirror_tech": EventBus.hint_show.emit("镜面技师·镜像: 复制玩家骰子", 4.0, Color(0.75, 0.45, 0.85))
 		if detected_card_id == "casino_owner": var cas_hint: int = 2 if GameState.get_card_level("casino_owner") >= 1 else 1; EventBus.hint_show.emit("赌场主·暗骰加码: 每人+%d暗骰" % cas_hint, 4.0, Color(0.52, 0.72, 0.92))
 		if detected_card_id == "prophet": EventBus.hint_show.emit("算法先知·重算: 每轮重掷骰子", 4.0, Color(0.98, 0.78, 0.29))
@@ -198,6 +214,12 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 				casino_ctrl.own_hidden_visible = casino_lv >= 2
 				if casino_lv >= 3: _casino_see_all_ais.append(casino_id)
 		EventBus.card_skill_triggered.emit("casino_owner", "暗骰", "全场")
+	if _boss_card_id == "casino_owner":
+		_casino_hidden += 2
+		for boss_casino_cup: RefCounted in [player_cup, ai_cup_1, ai_cup_2, ai_cup_3]:
+			boss_casino_cup.add_hidden_die(); boss_casino_cup.add_hidden_die()
+		if ai_controller_3:
+			ai_controller_3.own_hidden_visible = true
 	# === 同盟OLED: targets are selected after each roll ===
 	for alliance_id in _get_card_ais("alliance_oled"):
 		EventBus.card_skill_triggered.emit("alliance_oled", "全知就绪", alliance_id)
@@ -208,6 +230,16 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 			for _i in range(3):
 				dealer_cup.add_die()
 		EventBus.hint_show.emit("庄家·开盘: %s 开局拥有8颗骰子" % get_ai_name_for_id(dealer_id), 4.0, Color(0.52, 0.72, 0.92))
+	if _boss_card_id == "dealer":
+		ai_cup_3.add_die(); ai_cup_3.add_die()
+	if _boss_card_id == "table_ghost":
+		if ai1_virus < AI_MAX_VIRUS: _ai_shields["ai1"] = true
+		if ai2_virus < AI_MAX_VIRUS: _ai_shields["ai2"] = true
+	if GameState.has_boss_fragment("casino_owner"):
+		player_cup.add_die()
+	if not _boss_card_id.is_empty():
+		var boss_info := preload("res://scripts/resources/BossFragmentData.gd").get_info(_boss_card_id)
+		EventBus.hint_show.emit("Boss技能·%s" % boss_info.get("boss_name", "强化"), 4.0, Color(0.98, 0.35, 0.35))
 
 	# 信号噪音: disable consumable items (本局生效, 结束归还)
 	_noise_removed_items.clear()
@@ -237,6 +269,9 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 	game_active = true; round_number = 0
 	boss_mode_changed.emit(is_boss_mode)
 	_start_round()
+
+static func get_rust_start_dice_bonus(level: int) -> int:
+	return 4 if level >= 5 else (2 if level >= 4 else (1 if level >= 3 else 0))
 
 func _get_ai_cup(ai_id: String) -> RefCounted:
 	match ai_id:
@@ -288,8 +323,84 @@ func _copy_player_dice_to_mirror() -> void:
 			mirror_cup.dice[i].value = player_values[i]
 		EventBus.card_skill_triggered.emit("mirror_tech", "镜像", mirror_id)
 
+func _apply_player_round_effects() -> void:
+	if GameState.assimilation_curse == "growth_cost":
+		player_cup.add_die()
+		var one_indices: Array[int] = []
+		for i in range(player_cup.dice.size()):
+			if player_cup.dice[i].value == 1: one_indices.append(i)
+		if not one_indices.is_empty():
+			var changed_idx: int = one_indices[randi() % one_indices.size()]
+			player_cup.dice[changed_idx].value = randi_range(2, 6)
+	if GameState.has_boss_fragment("lucky_one"):
+		var non_one: Array[int] = []
+		for i in range(player_cup.dice.size()):
+			if player_cup.dice[i].value != 1: non_one.append(i)
+		if not non_one.is_empty():
+			player_cup.dice[non_one[randi() % non_one.size()]].value = 1
+	if GameState.has_boss_fragment("mirror_tech") and round_number == 1 and not player_cup.dice.is_empty():
+		player_cup.clone_at(randi() % player_cup.dice.size())
+	if GameState.has_boss_fragment("prophet"):
+		var lowest_idx: int = -1
+		var lowest_value: int = 7
+		for i in range(player_cup.dice.size()):
+			var value: int = player_cup.dice[i].value
+			if value != 1 and value < lowest_value:
+				lowest_value = value; lowest_idx = i
+		if lowest_idx >= 0:
+			var new_value: int = randi_range(1, 6)
+			player_cup.dice[lowest_idx].value = maxi(lowest_value, new_value)
+	if GameState.has_boss_fragment("alliance_oled"):
+		var candidates: Array[String] = []
+		for ai_id in ["ai1", "ai2", "ai3"]:
+			if _is_ai_alive(ai_id): candidates.append(ai_id)
+		if not candidates.is_empty():
+			var target_id: String = candidates[randi() % candidates.size()]
+			var target_cup: RefCounted = _get_ai_cup(target_id)
+			var visible_values: Array[int] = []
+			for die in target_cup.dice:
+				if not die.is_hidden: visible_values.append(die.value)
+			if not visible_values.is_empty():
+				EventBus.hint_show.emit("同盟碎片看见 %s 的一颗骰子：%d" % [get_ai_name_for_id(target_id), visible_values[randi() % visible_values.size()]], 4.0, Color(0.36, 0.79, 0.65))
+
+func _apply_boss_round_effects() -> void:
+	if _boss_card_id.is_empty() or not _is_ai_alive(_boss_ai_id): return
+	var boss_cup: RefCounted = _get_ai_cup(_boss_ai_id)
+	if _boss_card_id == "lucky_one":
+		var changed: int = 0
+		for die in boss_cup.dice:
+			if die.value != 1 and changed < 2:
+				die.value = 1; changed += 1
+	elif _boss_card_id == "mirror_tech" and not player_cup.dice.is_empty():
+		var counts: Dictionary = {}
+		for die in player_cup.dice: counts[die.value] = int(counts.get(die.value, 0)) + 1
+		var best_value: int = player_cup.dice[0].value
+		for value in counts:
+			if int(counts[value]) > int(counts.get(best_value, 0)): best_value = value
+		boss_cup.add_die_with_value(best_value)
+	elif _boss_card_id == "prophet" and boss_cup.dice.size() >= 2:
+		var counts: Dictionary = {}
+		for die in boss_cup.dice: counts[die.value] = int(counts.get(die.value, 0)) + 1
+		var best_value: int = boss_cup.dice[0].value
+		for value in counts:
+			if int(counts[value]) > int(counts.get(best_value, 0)): best_value = value
+		boss_cup.dice[0].value = best_value; boss_cup.dice[1].value = best_value
+	elif _boss_card_id == "alliance_oled":
+		var normal_values: Array[int] = []
+		for die in player_cup.dice:
+			if not die.is_hidden: normal_values.append(die.value)
+		normal_values.shuffle()
+		var exposed: Array = normal_values.slice(0, mini(2, normal_values.size()))
+		var boss_ctrl: RefCounted = _get_ai_controller(_boss_ai_id)
+		if boss_ctrl: boss_ctrl.player_full_values.append_array(exposed)
+		_share_public_values(exposed, _boss_ai_id)
+		if not exposed.is_empty(): EventBus.hint_show.emit("Boss·公开审判：你的骰子 %s 被公开" % str(exposed), 4.0, Color(0.98, 0.35, 0.35))
+
 func _start_round() -> void:
 	if not game_active: return
+	while GameState.assimilation_count == 1 and GameState.assimilation_curse.is_empty():
+		await get_tree().process_frame
+		if not game_active: return
 	round_number += 1
 	_round_count += 1
 	# Clear per-round knowledge while keeping per-battle skill usage counters.
@@ -300,6 +411,7 @@ func _start_round() -> void:
 	if ai1_virus < AI_MAX_VIRUS: ai_cup_1.roll_new_round()
 	if ai2_virus < AI_MAX_VIRUS: ai_cup_2.roll_new_round()
 	if ai3_virus < AI_MAX_VIRUS: ai_cup_3.roll_new_round()
+	_apply_player_round_effects()
 	for fate_ai in _ai_fate_effects.keys():
 		if not _is_ai_alive(fate_ai):
 			_ai_fate_effects.erase(fate_ai)
@@ -365,7 +477,7 @@ func _start_round() -> void:
 	# === 幸运儿: 每轮保证额外的① ===
 	for lucky_id in _living_card_ais("lucky_one"):
 		var lucky_lv: int = GameState.get_card_level("lucky_one")
-		var lucky_count: int = 1 + lucky_lv
+		var lucky_count: int = mini(3, 1 + lucky_lv)
 		var cup: RefCounted = _get_ai_cup(lucky_id)
 		if cup:
 			for i in range(mini(lucky_count, cup.dice.size())):
@@ -391,6 +503,7 @@ func _start_round() -> void:
 			# Lv.1: gain +1 die after reroll
 			if prop_lv >= 1:
 				cup.add_die()
+	_apply_boss_round_effects()
 	# Stage 3: one infectious face; a bid on it forces the next bid to keep that face.
 	if GameState.current_stage == 2:
 		infectious_number = randi() % 6 + 1
@@ -403,9 +516,16 @@ func _start_round() -> void:
 			var previous_forbidden: int = forbidden_number
 			while forbidden_number == 0 or forbidden_number == previous_forbidden:
 				forbidden_number = randi() % 6 + 1
-		EventBus.hint_show.emit("禁忌点数: %d，叫到者立即扣1颗骰子" % forbidden_number, 4.0, Color(0.98, 0.35, 0.35))
+		boss_forbidden_number = 0
+		if _boss_card_id == "dice_god" and _is_ai_alive(_boss_ai_id):
+			boss_forbidden_number = randi() % 6 + 1
+			while boss_forbidden_number == forbidden_number:
+				boss_forbidden_number = randi() % 6 + 1
+			EventBus.hint_show.emit("双重禁忌: %d / %d，叫到任意点数扣1骰" % [forbidden_number, boss_forbidden_number], 4.0, Color(0.98, 0.35, 0.35))
+		else:
+			EventBus.hint_show.emit("禁忌点数: %d，叫到者立即扣1颗骰子" % forbidden_number, 4.0, Color(0.98, 0.35, 0.35))
 	else:
-		forbidden_number = 0
+		forbidden_number = 0; boss_forbidden_number = 0
 	var tf_ai1: bool = ai1_virus < AI_MAX_VIRUS and card_has("ai1", "two_face")
 	var tf_ai2: bool = ai2_virus < AI_MAX_VIRUS and card_has("ai2", "two_face")
 	var tf_ai3: bool = ai3_virus < AI_MAX_VIRUS and card_has("ai3", "two_face")
@@ -493,6 +613,10 @@ func _is_valid_bid(count: int, value: int) -> bool:
 	return count > current_bid_count or (count == current_bid_count and value > current_bid_value)
 
 func _infect_player() -> bool:
+	if GameState.has_boss_fragment("table_ghost") and not _fragment_ghost_used:
+		_fragment_ghost_used = true
+		EventBus.hint_show.emit("幽灵碎片免疫了本局第一次同化", 3.0, Color(0.75, 0.45, 0.85))
+		return false
 	var pardon_count_before: int = GameState.consumable_items.count("royal_pardon")
 	GameState.assimilate()
 	if GameState.consumable_items.count("royal_pardon") < pardon_count_before:
@@ -517,7 +641,7 @@ func _infect_ai_immediately(ai_id: String) -> bool:
 	return eliminated
 
 func _apply_forbidden_penalty(bidder: String) -> void:
-	if GameState.current_stage != 3 or current_bid_value != forbidden_number:
+	if GameState.current_stage != 3 or current_bid_value not in [forbidden_number, boss_forbidden_number]:
 		return
 	var cup: RefCounted = player_cup if bidder == "player" else _get_ai_cup(bidder)
 	if cup and cup.dice.size() > 0:
@@ -543,6 +667,7 @@ func _sanitize_ai_bid(proposed: Dictionary) -> Dictionary:
 ## Player actions
 func player_bid(count: int, value: int) -> bool:
 	if not game_active or current_player != "player": return false
+	if GameState.assimilation_curse == "double_wild" and value in [1, 3]: return false
 	if not _is_valid_bid(count, value): return false
 	current_bid_count = count; current_bid_value = value; last_bidder = "player"
 	bid_updated.emit(count, value, "你")
@@ -593,7 +718,7 @@ func _ai_turn(ai_id: String) -> void:
 	# 裁判长：消耗自己的行动，指定一名存活对手立即按当前局面行动。
 	if card_has(ai_id, "referee"):
 		var ref_lv: int = GameState.get_card_level("referee")
-		var use_limit: int = maxi(1, ref_lv)
+		var use_limit: int = clampi(ref_lv, 1, 3)
 		var used: int = int(_referee_uses.get(ai_id, 0))
 		if used < use_limit:
 			var forced_targets: Array[String] = []
@@ -681,6 +806,9 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 	var total_match: int = 0
 	var six_wild: bool = _twoface_present
 	if player_virus < PLAYER_MAX_VIRUS: total_match += player_cup.count_matches_revealing(target_value, six_wild)
+	if player_virus < PLAYER_MAX_VIRUS and GameState.assimilation_curse == "double_wild" and target_value not in [1, 3]:
+		for die in player_cup.dice:
+			if die.value == 3: total_match += 1
 	if ai1_virus < AI_MAX_VIRUS: total_match += ai_cup_1.count_matches_revealing(target_value, six_wild)
 	if ai2_virus < AI_MAX_VIRUS: total_match += ai_cup_2.count_matches_revealing(target_value, six_wild)
 	if ai3_virus < AI_MAX_VIRUS: total_match += ai_cup_3.count_matches_revealing(target_value, six_wild)
@@ -704,6 +832,9 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 		if player_shield:
 			player_shield = false
 			EventBus.hint_show.emit("幽灵附身免疫了一次伤害!", 3.0, Color(0.75, 0.45, 0.85))
+		elif challenger == "player" and GameState.has_boss_fragment("referee") and not _fragment_referee_used:
+			_fragment_referee_used = true
+			EventBus.hint_show.emit("裁判碎片改判：本局第一次质疑失败不产生同化", 3.0, Color(0.98, 0.78, 0.29))
 		else:
 			_infect_player()
 	elif loser == "ai1":
@@ -727,6 +858,9 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 	elif loser == "ai3":
 		if _ai_shields.get("ai3", false):
 			_ai_shields["ai3"] = false; EventBus.card_skill_triggered.emit("table_ghost", "免疫", "ai3")
+		elif _boss_card_id == "referee" and not _boss_referee_shield_used:
+			_boss_referee_shield_used = true
+			EventBus.hint_show.emit("Boss·终审豁免：免疫本局第一次淘汰", 3.0, Color(0.98, 0.35, 0.35))
 		elif ai_controller_3 and ai_controller_3.infect():
 			ai3_virus = AI_MAX_VIRUS
 			_apply_rust_warrior_skill("ai3", winner)
@@ -737,6 +871,25 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 	var ai1_dead: bool = ai1_virus >= AI_MAX_VIRUS
 	var ai2_dead: bool = ai2_virus >= AI_MAX_VIRUS
 	var ai3_dead: bool = ai3_virus >= AI_MAX_VIRUS
+	if challenger == "player" and not bid_true and target.begins_with("ai"):
+		var devour_count: int = 0
+		if GameState.assimilation_curse == "devour_challenge": devour_count += 1
+		if GameState.has_boss_fragment("recycler"): devour_count += 1
+		var devour_target: RefCounted = _get_ai_cup(target)
+		var stolen: int = 0
+		while stolen < devour_count and devour_target and not devour_target.dice.is_empty():
+			devour_target.dice.pop_back(); devour_target.dice_count -= 1
+			player_cup.add_die(); stolen += 1
+		if stolen > 0:
+			EventBus.hint_show.emit("吞噬成功：从%s夺取%d颗骰子" % [get_ai_name_for_id(target), stolen], 3.0, Color(0.36, 0.79, 0.65))
+	if _boss_card_id == "recycler" and _is_ai_alive(_boss_ai_id) and loser != _boss_ai_id:
+		var loser_cup: RefCounted = player_cup if loser == "player" else _get_ai_cup(loser)
+		if loser_cup and not loser_cup.dice.is_empty():
+			loser_cup.dice.pop_back(); loser_cup.dice_count -= 1
+			ai_cup_3.add_die()
+			EventBus.hint_show.emit("Boss·强制回收：从本轮失败者处夺取1颗骰子", 3.0, Color(0.98, 0.35, 0.35))
+	if loser == _boss_ai_id and _boss_card_id == "table_ghost" and ai3_dead:
+		_ai_shields["ai1"] = false; _ai_shields["ai2"] = false
 	# === 回收商: 质疑失败（叫牌为真）时，每名存活回收商独立触发。 ===
 	if bid_true:
 		var rec_lv: int = GameState.get_card_level("recycler")
@@ -903,7 +1056,8 @@ func get_min_opening() -> int:
 	if ai1_virus < AI_MAX_VIRUS: alive_count += 1
 	if ai2_virus < AI_MAX_VIRUS: alive_count += 1
 	if ai3_virus < AI_MAX_VIRUS: alive_count += 1
-	return alive_count + 1
+	var boss_extra: int = 2 if _boss_card_id == "dealer" and _is_ai_alive(_boss_ai_id) else 0
+	return alive_count + 1 + boss_extra
 
 ## Think delay based on rarity
 func _think_delay(ai_id: String, is_challenge: bool, is_opening: bool) -> float:
