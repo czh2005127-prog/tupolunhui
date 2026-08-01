@@ -58,6 +58,9 @@ var _notify_label: RichTextLabel
 var _tutorial_bar: ColorRect
 var _tutorial_label: Label
 var _tutorial_tween: Tween
+var _tutorial_history: Array[String] = []
+var _tutorial_review_panel: ColorRect
+var _tutorial_review_text: RichTextLabel
 var _hint_history: Array[String] = []
 var _history_index: int = 0
 var _last_reveal_text: String = ""  # 骰子揭示文本 (显示在继续按钮上方)
@@ -209,6 +212,15 @@ func _build_all_ui() -> void:
 	_tutorial_label.add_theme_font_size_override("font_size", 13)
 	_tutorial_label.add_theme_color_override("font_color", Color(0.78, 1.0, 0.9))
 	_tutorial_bar.add_child(_tutorial_label)
+	var tutorial_review_btn := Button.new()
+	tutorial_review_btn.name = "TutorialReviewButton"
+	tutorial_review_btn.text = "教程回顾"
+	tutorial_review_btn.position = Vector2(MX, 24)
+	tutorial_review_btn.size = Vector2(130, 30)
+	tutorial_review_btn.visible = GameState.tutorial_enabled
+	tutorial_review_btn.pressed.connect(_toggle_tutorial_review)
+	add_child(tutorial_review_btn)
+	_build_tutorial_review_panel()
 	# Virus health squares (2 squares, inline next to exit btn)
 	for i in range(2):
 		var vq: ColorRect = ColorRect.new()
@@ -1179,9 +1191,20 @@ func _on_game_over(winner: String) -> void:
 		_show_death_screen()
 
 func _resolve_prisoner_contract() -> void:
-	if GameState.current_contract.is_empty() or not game_ctrl or not game_ctrl.contract_was_completed():
+	if GameState.current_contract.is_empty() or not game_ctrl:
 		return
 	var title: String = str(GameState.current_contract.get("title", "囚徒交易"))
+	if not game_ctrl.contract_was_completed():
+		var penalty_type: String = str(GameState.current_contract.get("penalty_type", ""))
+		var penalty: int = int(GameState.current_contract.get("penalty", 0))
+		if penalty_type == "gold":
+			var lost: int = mini(GameState.gold, penalty)
+			if lost > 0: GameState.spend_gold(lost)
+			EventBus.hint_show.emit("交易违约·%s：失去%d金币" % [title, lost], 4.0, Color(0.94, 0.4, 0.4))
+		elif penalty_type == "next_die":
+			GameState.adjust_bonus_dice(-penalty)
+			EventBus.hint_show.emit("交易违约·%s：下一场战斗−%d骰" % [title, penalty], 4.0, Color(0.94, 0.4, 0.4))
+		return
 	if GameState.current_contract.get("reward_type", "") == "gold":
 		var amount: int = int(GameState.current_contract.get("reward", 0))
 		GameState.add_gold(amount)
@@ -2028,6 +2051,9 @@ func _on_hint_show(message: String, duration: float, color: Color) -> void:
 
 func _on_tutorial_hint_show(message: String, duration: float) -> void:
 	if not _tutorial_bar or not _tutorial_label: return
+	if message not in _tutorial_history:
+		_tutorial_history.append(message)
+	_refresh_tutorial_review()
 	if _tutorial_tween and _tutorial_tween.is_valid():
 		_tutorial_tween.kill()
 	_tutorial_bar.modulate.a = 1.0
@@ -2037,6 +2063,56 @@ func _on_tutorial_hint_show(message: String, duration: float) -> void:
 	_tutorial_tween.tween_interval(duration)
 	_tutorial_tween.tween_property(_tutorial_bar, "modulate:a", 0.0, 0.35)
 	_tutorial_tween.tween_callback(func(): _tutorial_bar.visible = false)
+
+func _build_tutorial_review_panel() -> void:
+	_tutorial_review_panel = ColorRect.new()
+	_tutorial_review_panel.name = "TutorialReviewPanel"
+	_tutorial_review_panel.position = Vector2(170, 80)
+	_tutorial_review_panel.size = Vector2(940, 560)
+	_tutorial_review_panel.color = Color(0.025, 0.045, 0.055, 0.98)
+	_tutorial_review_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_tutorial_review_panel.z_index = 350
+	_tutorial_review_panel.visible = false
+	add_child(_tutorial_review_panel)
+	_add_border(_tutorial_review_panel, 940, 560, Color(0.36, 0.79, 0.65), 3)
+	var title := Label.new()
+	title.text = "教程回顾"
+	title.position = Vector2(30, 20)
+	title.size = Vector2(880, 42)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 25)
+	title.add_theme_color_override("font_color", Color(0.78, 1.0, 0.9))
+	_tutorial_review_panel.add_child(title)
+	_tutorial_review_text = RichTextLabel.new()
+	_tutorial_review_text.bbcode_enabled = true
+	_tutorial_review_text.position = Vector2(60, 82)
+	_tutorial_review_text.size = Vector2(820, 390)
+	_tutorial_review_text.add_theme_font_size_override("normal_font_size", 16)
+	_tutorial_review_text.add_theme_color_override("default_color", Color(0.86, 0.9, 0.9))
+	_tutorial_review_panel.add_child(_tutorial_review_text)
+	var close := Button.new()
+	close.text = "关闭并继续"
+	close.position = Vector2(350, 492)
+	close.size = Vector2(240, 44)
+	close.pressed.connect(_toggle_tutorial_review)
+	_tutorial_review_panel.add_child(close)
+	_refresh_tutorial_review()
+
+func _refresh_tutorial_review() -> void:
+	if not _tutorial_review_text: return
+	var text: String = "[b]基础规则[/b]\n①可以代替其他点数；有人叫①后，本轮①不再万能。\n每轮最低起叫为存活人数＋1。后续必须增加数量，或数量相同提高点数。\n质疑成功：被质疑者失败；质疑失败：质疑者失败。\n"
+	if _tutorial_history.is_empty():
+		text += "\n[b]本场教学记录[/b]\n尚未出现新的教学提示。"
+	else:
+		text += "\n[b]本场教学记录[/b]\n"
+		for i in range(_tutorial_history.size()):
+			text += "%d. %s\n" % [i + 1, _tutorial_history[i]]
+	_tutorial_review_text.text = text
+
+func _toggle_tutorial_review() -> void:
+	if not _tutorial_review_panel: return
+	_refresh_tutorial_review()
+	_tutorial_review_panel.visible = not _tutorial_review_panel.visible
 
 func _on_hint_clicked(event: InputEvent) -> void:
 	if not (event is InputEventMouseButton and event.pressed): return

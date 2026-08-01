@@ -174,6 +174,9 @@ func get_bonus_dice_count() -> int:
 func set_bonus_dice(count: int) -> void:
 	_temp_bonus_dice = count
 
+func adjust_bonus_dice(delta: int) -> void:
+	_temp_bonus_dice += delta
+
 func add_gold(amount: int) -> void:
 	gold += amount
 	EventBus.gold_changed.emit(gold)

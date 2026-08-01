@@ -53,9 +53,10 @@ func _pick_event() -> Dictionary:
 	var pool: Array[Dictionary] = _get_pool()
 	var fresh: Array = []
 	for e in pool:
-		if not (e["id"] in GameState._seen_events):
+		if _stage in e.get("stages", []) and not (e["id"] in GameState._seen_events):
 			fresh.append(e)
-	if fresh.is_empty(): fresh = pool
+	if fresh.is_empty():
+		fresh = pool.filter(func(e): return _stage in e.get("stages", []))
 
 	var chosen: Dictionary = fresh[randi() % fresh.size()]
 	_remember(chosen["id"])
@@ -63,12 +64,18 @@ func _pick_event() -> Dictionary:
 
 func _get_pool() -> Array[Dictionary]:
 	return [
-		{"id": "scrap_heap", "type": Category.RESOURCE, "title": "废弃零件堆", "desc": "散落的零件中还残留着可用算力。", "choice_a": "翻找 (+15 金币)", "choice_b": "拆芯片 (1 件普通道具)"},
-		{"id": "black_vendor", "type": Category.RESOURCE, "title": "黑市贩子", "desc": "披着斗篷的贩子压低声音兜售来路不明的芯片。", "choice_a": "买可疑道具 (5 金换 1 稀有)", "choice_b": "举报 (+20 金币)"},
-		{"id": "fault_protocol", "type": Category.RISK, "title": "故障协议", "desc": "终端要求你确认一份来源不明的系统备份。", "choice_a": "确认备份 (清除半同化)", "choice_b": "拒绝协议 (下局 6 颗骰子)"},
-		{"id": "runaway_die", "type": Category.RISK, "title": "失控骰子", "desc": "一颗失控的骰子在管道间来回跳动。", "choice_a": "抓住 (下局一颗固定⑥)", "choice_b": "让它跳 (+30 金币)"},
-		{"id": "memory_fragment", "type": Category.NARRATIVE, "title": "记忆残片", "desc": "残片中保存着上一位挑战者最后留下的资源。", "choice_a": "继承道具 (1 件稀有)", "choice_b": "继承金币 (+40)"},
-		{"id": "last_stand", "type": Category.RISK, "title": "破釜沉舟", "desc": "你可以提前破坏 Boss 的骰子，但代价会立刻侵入你的系统。", "choice_a": "孤注一掷 (Boss 对手−1骰，开场半同化)", "choice_b": "保存体力 (无效果)"},
+		{"id": "scrap_heap", "stages": [0], "type": Category.RESOURCE, "title": "废弃零件堆", "desc": "后院堆着历代挑战者被拆下的零件。有些屏幕仍在闪烁，重复最后一次叫牌。", "choice_a": "翻找 (+15 金币)", "choice_b": "拆芯片 (1 件普通道具)"},
+		{"id": "fault_protocol", "stages": [0], "type": Category.RISK, "title": "故障协议", "desc": "一台报废终端认错了你的编号，要求恢复上一名囚徒留下的身体备份。", "choice_a": "确认备份 (清除半同化)", "choice_b": "拒绝协议 (下局 6 颗骰子)"},
+		{"id": "memory_fragment", "stages": [0], "type": Category.NARRATIVE, "title": "记忆残片", "desc": "碎裂卡面里封着一个陌生人的最后记忆：他把仅剩的资源藏在后院，等下一位挑战者。", "choice_a": "继承道具 (1 件稀有)", "choice_b": "继承金币 (+40)"},
+		{"id": "black_vendor", "stages": [1], "type": Category.RESOURCE, "title": "黑市贩子", "desc": "地下赌场的贩子掀开斗篷，里面挂着从失败者卡面上拆下的芯片。", "choice_a": "买可疑道具 (5 金换 1 稀有)", "choice_b": "举报 (+20 金币)"},
+		{"id": "runaway_die", "stages": [1], "type": Category.RISK, "title": "失控骰子", "desc": "一颗从暗骰杯里逃出的骰子撞击管道。它似乎宁愿被你抓住，也不愿回到赌桌。", "choice_a": "抓住 (下局一颗固定⑥)", "choice_b": "让它跳 (+30 金币)"},
+		{"id": "underground_broadcast", "stages": [1], "type": Category.INTEL, "title": "地下广播", "desc": "非法频道里传来囚徒的低语：木盒会抹掉名字，却抹不掉藏在骰子里的指令。", "choice_a": "破解频道 (1 件普通道具)", "choice_b": "出售坐标 (+25 金币)"},
+		{"id": "last_stand", "stages": [2], "type": Category.RISK, "title": "破釜沉舟", "desc": "黑帮私局的维修工愿意提前破坏 Boss 骰杯，但他索要的报酬是让诅咒先进入你的身体。", "choice_a": "孤注一掷 (Boss 对手−1骰，开场半同化)", "choice_b": "保存体力 (无效果)"},
+		{"id": "gang_ledger", "stages": [2], "type": Category.RESOURCE, "title": "黑帮账本", "desc": "账本记录着每一场被操纵的赌局。荷官愿意收钱改动下一张Boss桌的骰杯。", "choice_a": "收买荷官 (20金，Boss−1骰)", "choice_b": "卖回账本 (+25金币)"},
+		{"id": "traitor_seat", "stages": [2], "type": Category.NARRATIVE, "title": "叛徒席位", "desc": "空椅上刻着：‘我出卖了同伴，却仍被做成卡。别相信盒子给出的赦免。’", "choice_a": "交出道具 (清除半同化)", "choice_b": "接过骰杯 (下战+1骰，−10金币)"},
+		{"id": "divine_altar", "stages": [3], "type": Category.RISK, "title": "神前供桌", "desc": "终极赌场的供桌上摆着失败者的道具。每一件都刻着骰子之神的眼睛。", "choice_a": "献出道具 (骰神−1骰)", "choice_b": "盗取供品 (+30金币，Boss前半同化)"},
+		{"id": "former_challenger", "stages": [3], "type": Category.NARRATIVE, "title": "上一位挑战者", "desc": "一张快要褪色的卡拦住你：‘我只差最后一次质疑。遗物给你，或者坐下听完我的名字。’", "choice_a": "接过遗物 (1 件稀有)", "choice_b": "听完遗言 (清除半同化)"},
+		{"id": "blank_card", "stages": [3], "type": Category.INTEL, "title": "空白卡面", "desc": "一张尚未写入名字的卡悬在门前。木盒已经为下一名囚徒留好了位置。", "choice_a": "刻下假名 (下战一颗固定⑥)", "choice_b": "撕下金边 (+35金币)"},
 	]
 
 ## Retained only as narrative source material; it is not part of the v1.0 event pool.
@@ -184,7 +191,7 @@ func _apply_result(ev: Dictionary, choice: String) -> String:
 			if choice == "a":
 				GameState.clear_assimilation()
 				return "备份恢复完成，半同化状态已清除。"
-			GameState.set_bonus_dice(1)
+			GameState.adjust_bonus_dice(1)
 			return "协议已拒绝，下一局以 6 颗骰子开场。"
 		"runaway_die":
 			if choice == "a":
@@ -204,6 +211,50 @@ func _apply_result(ev: Dictionary, choice: String) -> String:
 				GameState.next_boss_start_assimilated = true
 				return "破坏程序已经植入：Boss 对手开场各少 1 骰，你将以半同化状态迎战。"
 			return "你保存了体力，没有额外效果。"
+		"underground_broadcast":
+			if choice == "a":
+				var item_id: String = _give_item("common")
+				return "囚徒频道发来一段可执行指令：%s。" % _item_name(item_id)
+			GameState.add_gold(25)
+			return "你卖掉频道坐标，获得 25 金币。广播随即沉默。"
+		"gang_ledger":
+			if choice == "a":
+				if not GameState.spend_gold(20): return "金币不足，荷官合上了账本。"
+				GameState.next_boss_dice_penalty = maxi(GameState.next_boss_dice_penalty, 1)
+				return "荷官收下 20 金币，答应从 Boss 的骰杯中各取走一颗骰子。"
+			GameState.add_gold(25)
+			return "账本回到黑帮手里。你得到 25 金币，也失去了一份证据。"
+		"traitor_seat":
+			if choice == "a":
+				if GameState.consumable_items.is_empty(): return "椅子拒绝了你：你没有可以交出的道具。"
+				var lost_item: String = GameState.consumable_items.pop_back()
+				GameState.clear_assimilation()
+				return "你交出%s，椅背上的诅咒纹路暂时熄灭。" % _item_name(lost_item)
+			GameState.set_bonus_dice(1)
+			var paid: int = mini(GameState.gold, 10)
+			if paid > 0: GameState.spend_gold(paid)
+			return "你接过叛徒的骰杯：下一战 +1 骰，同时失去 %d 金币。" % paid
+		"divine_altar":
+			if choice == "a":
+				if GameState.consumable_items.is_empty(): return "供桌没有接受空手的献祭。"
+				var offered_item: String = GameState.consumable_items.pop_back()
+				GameState.next_boss_dice_penalty = maxi(GameState.next_boss_dice_penalty, 1)
+				return "%s被供桌吞没。骰子之神的骰杯出现一道裂缝。" % _item_name(offered_item)
+			GameState.add_gold(30)
+			GameState.next_boss_start_assimilated = true
+			return "你盗走 30 金币。神像睁开眼睛：Boss 战将以半同化状态开始。"
+		"former_challenger":
+			if choice == "a":
+				var item_id: String = _pick_rare()
+				return "上一位挑战者把%s推到你手中，随后从卡面消失。" % _item_name(item_id)
+			GameState.clear_assimilation()
+			return "你听完了他的名字。诅咒短暂承认你仍是一个人，半同化被清除。"
+		"blank_card":
+			if choice == "a":
+				GameState.next_battle_fixed_six = true
+				return "你刻下一个假名。空白卡暂时被骗过，下一战一颗骰子固定为⑥。"
+			GameState.add_gold(35)
+			return "你撕下卡面的金边，获得 35 金币。空白处浮现出你的轮廓。"
 		# INTEL
 		"intel_chip":
 			if choice == "a":

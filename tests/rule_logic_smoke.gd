@@ -11,6 +11,7 @@ const MainMenuScript := preload("res://scripts/ui/MainMenu.gd")
 const CardDrawUIScript := preload("res://scripts/ui/CardDrawUI.gd")
 const RustWorkshopScript := preload("res://scripts/ui/RustWorkshop.gd")
 const DiceGameScene := preload("res://scenes/gameflow/DiceGameScene.tscn")
+const EventUIScript := preload("res://scripts/ui/EventUI.gd")
 
 func _ready() -> void:
 	GameState.tutorial_completed = true
@@ -23,6 +24,7 @@ func _ready() -> void:
 	_test_battle_entry_snapshot()
 	_test_random_stage_nodes()
 	_test_forbidden_rewards_and_payout()
+	_test_prisoner_contract_objectives()
 	_test_shop_build()
 	await _test_tutorial_bar_separation()
 	_test_ai_probability_logic()
@@ -30,6 +32,7 @@ func _ready() -> void:
 	await _test_rust_workshop_rebuild()
 	await _test_duplicate_dealers()
 	await _test_boss_dealer()
+	await _test_dice_god_phases()
 	print("RULE_LOGIC_SMOKE_OK")
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -133,13 +136,26 @@ func _test_random_stage_nodes() -> void:
 	var flow = GameFlowScript.new()
 	flow.current_stage_index = 0
 	flow._generate_nodes()
-	assert(flow.nodes_this_stage.size() == 5)
+	assert(flow.nodes_this_stage.size() == 6)
 	assert(flow.nodes_this_stage.back() == GameFlowScript.NodeType.BOSS)
 	assert(flow.nodes_this_stage.count(GameFlowScript.NodeType.DICE) == 2)
 	assert(flow.nodes_this_stage.count(GameFlowScript.NodeType.SHOP) == 1)
-	assert(flow.nodes_this_stage.count(GameFlowScript.NodeType.EVENT) == 1)
+	assert(flow.nodes_this_stage.count(GameFlowScript.NodeType.EVENT) == 2)
 	assert(flow.nodes_this_stage.find(GameFlowScript.NodeType.DICE) < flow.nodes_this_stage.find(GameFlowScript.NodeType.SHOP), "商店前必须至少有一场战斗")
 	flow.free()
+	GameState.stage_node_orders = {"0": [GameFlowScript.NodeType.DICE, GameFlowScript.NodeType.SHOP, GameFlowScript.NodeType.DICE, GameFlowScript.NodeType.EVENT, GameFlowScript.NodeType.BOSS]}
+	var migrated_flow = GameFlowScript.new()
+	migrated_flow.current_stage_index = 0
+	migrated_flow._generate_nodes()
+	assert(migrated_flow.nodes_this_stage.size() == 6 and migrated_flow.nodes_this_stage[-2] == GameFlowScript.NodeType.EVENT, "旧五节点存档应在Boss前补入事件")
+	migrated_flow.free()
+	GameState.stage_node_orders.clear()
+	var event_ui = EventUIScript.new()
+	var event_pool: Array[Dictionary] = event_ui._get_pool()
+	assert(event_pool.size() == 12, "正式事件池应包含四层各三个剧情事件")
+	for stage in range(4):
+		assert(event_pool.filter(func(event): return stage in event.stages).size() == 3)
+	event_ui.free()
 
 func _test_forbidden_rewards_and_payout() -> void:
 	var old_rules: Array[String] = GameState.active_forbidden_rules.duplicate()
@@ -153,6 +169,20 @@ func _test_forbidden_rewards_and_payout() -> void:
 	assert(game.claim_payout_reward() == 0, "清算奖励只能领取一次")
 	game.free()
 	GameState.active_forbidden_rules = old_rules
+
+func _test_prisoner_contract_objectives() -> void:
+	var game = DiceGameScript.new()
+	GameState.current_contract = {"id": "five_twos"}
+	game._contract_five_twos = true
+	assert(game.contract_was_completed())
+	GameState.current_contract = {"id": "three_faces"}
+	game._contract_bid_faces.assign([2, 4, 6])
+	assert(game.contract_was_completed())
+	GameState.current_contract = {"id": "three_rounds"}
+	game.round_number = 3
+	assert(game.contract_was_completed())
+	GameState.current_contract.clear()
+	game.free()
 
 func _test_shop_build() -> void:
 	var old_seen: bool = GameState.tutorial_shop_seen
@@ -173,6 +203,20 @@ func _test_tutorial_bar_separation() -> void:
 	assert(hud.get("_tutorial_bar").visible, "教程应显示在独立教程栏")
 	assert(hud.get("_tutorial_label").text == "教程测试")
 	assert(hud.get("_notify_label").text != "教程测试", "教程不得覆盖现有提示栏")
+	assert(hud.find_child("TutorialReviewButton", true, false) != null)
+	hud._toggle_tutorial_review()
+	assert(hud.get("_tutorial_review_panel").visible, "教程回顾栏应能独立打开")
+	assert("教程测试" in hud.get("_tutorial_review_text").text)
+	GameState.gold = 8
+	GameState.current_contract = {"id": "five_twos", "title": "五个二", "penalty_type": "gold", "penalty": 12}
+	hud.game_ctrl._contract_five_twos = false
+	hud._resolve_prisoner_contract()
+	assert(GameState.gold == 0, "囚徒契约违约扣款不得使金币变成负数")
+	GameState.current_contract = {"id": "three_rounds", "title": "熬过三轮", "penalty_type": "next_die", "penalty": 1}
+	hud.game_ctrl.round_number = 1
+	hud._resolve_prisoner_contract()
+	assert(GameState.get_bonus_dice_count() == -1, "熬过三轮违约应使下一战少一骰")
+	GameState.current_contract.clear()
 	remove_child(hud)
 	hud.free()
 
@@ -249,6 +293,32 @@ func _test_boss_dealer() -> void:
 	assert(game.ai_cup_3.dice.size() == 9, "Boss庄家应在普通庄家的8骰上额外+1")
 	assert(game.get_min_opening() == 5, "四人存活时最低起叫应为人数+1，即5")
 	game.game_active = false
+	await get_tree().create_timer(4.0).timeout
+	for ctrl in [game.ai_controller_1, game.ai_controller_2, game.ai_controller_3]:
+		if ctrl: ctrl.set_dice_game(null)
+	game.ai_controller_1 = null; game.ai_controller_2 = null; game.ai_controller_3 = null
+	game.ai_cup_1 = null; game.ai_cup_2 = null; game.ai_cup_3 = null; game.player_cup = null
+	remove_child(game)
+	game.free()
+
+func _test_dice_god_phases() -> void:
+	var commons: Array = CardDataScript.get_common_pool()
+	var dice_god = CardDataScript.get_card_by_id("dice_god")
+	var game = DiceGameScript.new()
+	add_child(game)
+	GameState.current_stage = 3
+	GameState.assimilation_count = 0
+	game.start_game(commons[0], commons[1], false, dice_god, true)
+	game.game_active = false
+	assert(game._dice_god_phase == 1)
+	assert(game.ai_controller_3.infect())
+	assert(game._try_advance_dice_god_phase("ai3"), "骰子之神首次应被淘汰时应进入第二阶段")
+	assert(game._dice_god_phase == 2 and game.ai3_virus == 0)
+	while game.ai_cup_3.dice.size() > 1:
+		game.ai_cup_3.dice.pop_back()
+		game.ai_cup_3.dice_count -= 1
+	game._update_dice_god_final_rule()
+	assert(game._dice_god_final_rule and game.player_cup.wild_disabled, "骰神仅剩一骰时全场万能骰应失效")
 	await get_tree().create_timer(4.0).timeout
 	for ctrl in [game.ai_controller_1, game.ai_controller_2, game.ai_controller_3]:
 		if ctrl: ctrl.set_dice_game(null)

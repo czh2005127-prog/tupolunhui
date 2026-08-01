@@ -57,6 +57,8 @@ var _skip_ai_turns: Dictionary = {}  # ai_id -> pending skipped turns
 var _boss_card_id: String = ""
 var _boss_ai_id: String = ""
 var _boss_referee_shield_used: bool = false
+var _dice_god_phase: int = 0
+var _dice_god_final_rule: bool = false
 var _fragment_referee_used: bool = false
 var _fragment_ghost_used: bool = false
 
@@ -84,7 +86,8 @@ var _pending_payout_gold: int = 0
 var _growth_dice_added: int = 0
 var _contract_start_items_used: int = 0
 var _contract_bold_bid: bool = false
-var _contract_challenge_success: bool = false
+var _contract_five_twos: bool = false
+var _contract_bid_faces: Array[int] = []
 var _tutorial_active: bool = false
 var _tutorial_forced_bids_remaining: int = 0
 var _tutorial_opening_done: bool = false
@@ -98,6 +101,8 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 	is_boss_mode = _is_boss
 	_boss_card_id = card3.card_id if is_boss_mode and card3 else ""
 	_boss_ai_id = "ai3" if not _boss_card_id.is_empty() else ""
+	_dice_god_phase = 1 if _boss_card_id == "dice_god" else 0
+	_dice_god_final_rule = false
 	var fragment_start_dice: int = 1 if GameState.has_boss_fragment("dealer") else 0
 	var base_player_dice: int = 4 if GameState.is_forbidden_rule_active("short_cup") else 5
 	var total: int = base_player_dice + _bonus_dice + fragment_start_dice
@@ -245,8 +250,8 @@ func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, ca
 	if GameState.has_boss_fragment("casino_owner"):
 		player_cup.add_die()
 	if not _boss_card_id.is_empty():
-		var boss_info := preload("res://scripts/resources/BossFragmentData.gd").get_info(_boss_card_id)
-		EventBus.hint_show.emit("Boss技能·%s" % boss_info.get("boss_name", "强化"), 4.0, Color(0.98, 0.35, 0.35))
+		var boss_skill_name: String = preload("res://scripts/resources/BossFragmentData.gd").get_boss_skill_name(_boss_card_id)
+		EventBus.hint_show.emit("Boss技能·%s" % boss_skill_name, 4.0, Color(0.98, 0.35, 0.35))
 
 	# 信号噪音: disable consumable items (本局生效, 结束归还)
 	_noise_removed_items.clear()
@@ -513,6 +518,7 @@ func _start_round() -> void:
 			if prop_lv >= 1:
 				cup.add_die()
 	_apply_boss_round_effects()
+	_update_dice_god_final_rule()
 	# Stage 3: one infectious face; a bid on it forces the next bid to keep that face.
 	if GameState.current_stage == 2:
 		infectious_number = randi() % 6 + 1
@@ -526,7 +532,7 @@ func _start_round() -> void:
 			while forbidden_number == 0 or forbidden_number == previous_forbidden:
 				forbidden_number = randi() % 6 + 1
 		boss_forbidden_number = 0
-		if _boss_card_id == "dice_god" and _is_ai_alive(_boss_ai_id):
+		if _boss_card_id == "dice_god" and _is_ai_alive(_boss_ai_id) and _dice_god_phase >= 2:
 			boss_forbidden_number = randi() % 6 + 1
 			while boss_forbidden_number == forbidden_number:
 				boss_forbidden_number = randi() % 6 + 1
@@ -538,10 +544,15 @@ func _start_round() -> void:
 	var tf_ai1: bool = ai1_virus < AI_MAX_VIRUS and card_has("ai1", "two_face")
 	var tf_ai2: bool = ai2_virus < AI_MAX_VIRUS and card_has("ai2", "two_face")
 	var tf_ai3: bool = ai3_virus < AI_MAX_VIRUS and card_has("ai3", "two_face")
-	_twoface_present = tf_ai1 or tf_ai2 or tf_ai3
+	_twoface_present = (tf_ai1 or tf_ai2 or tf_ai3) and not _dice_god_final_rule
 	ai_controller_1.set_six_wild(_twoface_present)
-	if ai_controller_2: ai_controller_2.set_six_wild(_twoface_present)
-	if ai_controller_3: ai_controller_3.set_six_wild(_twoface_present)
+	ai_controller_1.set_wild_disabled(_dice_god_final_rule)
+	if ai_controller_2:
+		ai_controller_2.set_six_wild(_twoface_present)
+		ai_controller_2.set_wild_disabled(_dice_god_final_rule)
+	if ai_controller_3:
+		ai_controller_3.set_six_wild(_twoface_present)
+		ai_controller_3.set_wild_disabled(_dice_god_final_rule)
 	# 独眼龙LCD: trigger once per battle, not once per round.
 	if not _get_card_ais("cyclops_lcd").is_empty() and _cyclops_locks.is_empty():
 		var cl_lv: int = GameState.get_card_level("cyclops_lcd")
@@ -653,6 +664,34 @@ func _infect_ai_immediately(ai_id: String) -> bool:
 		_apply_rust_warrior_skill(ai_id)
 	return eliminated
 
+func _update_dice_god_final_rule() -> void:
+	if _dice_god_final_rule or _boss_card_id != "dice_god" or _dice_god_phase < 2 or not _is_ai_alive(_boss_ai_id):
+		return
+	var god_cup: RefCounted = _get_ai_cup(_boss_ai_id)
+	if god_cup == null or god_cup.dice.size() > 1:
+		return
+	_dice_god_final_rule = true
+	for cup: RefCounted in [player_cup, ai_cup_1, ai_cup_2, ai_cup_3]:
+		if cup: cup.wild_disabled = true
+	EventBus.hint_show.emit("骰子之神·最终质疑：全场万能骰失效", 5.0, Color(0.98, 0.2, 0.2))
+	boss_skill_effect.emit("final_rule", "最终阶段：全场万能骰失效")
+
+func _try_advance_dice_god_phase(ai_id: String) -> bool:
+	if ai_id != _boss_ai_id or _boss_card_id != "dice_god" or _dice_god_phase != 1:
+		return false
+	var ctrl: RefCounted = _get_ai_controller(ai_id)
+	var cup: RefCounted = _get_ai_cup(ai_id)
+	if ctrl:
+		ctrl.is_eliminated = false
+		ctrl.virus_count = 0
+	if cup and cup.dice.size() > 1:
+		cup.dice.pop_back()
+		cup.dice_count -= 1
+	_dice_god_phase = 2
+	EventBus.hint_show.emit("骰子之神粉碎一颗骰子，进入第二阶段：每轮出现两个禁忌点数", 5.0, Color(0.98, 0.2, 0.2))
+	boss_skill_effect.emit("phase", "第二阶段：双重禁忌")
+	return true
+
 func _apply_forbidden_penalty(bidder: String) -> bool:
 	if (GameState.current_stage != 3 and not GameState.is_forbidden_rule_active("forbidden_spread")) or current_bid_value not in [forbidden_number, boss_forbidden_number]:
 		return false
@@ -726,6 +765,10 @@ func player_bid(count: int, value: int) -> bool:
 	var alive_at_bid: int = _living_ai_count() + (1 if player_virus < PLAYER_MAX_VIRUS else 0)
 	if count >= alive_at_bid + 4:
 		_contract_bold_bid = true
+	if count >= 5 and value == 2:
+		_contract_five_twos = true
+	if value not in _contract_bid_faces:
+		_contract_bid_faces.append(value)
 	current_bid_count = count; current_bid_value = value; last_bidder = "player"
 	bid_updated.emit(count, value, "你")
 	if _apply_forbidden_penalty("player"): return true
@@ -874,14 +917,14 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 	var total_match: int = 0
 	var six_wild: bool = _twoface_present
 	if player_virus < PLAYER_MAX_VIRUS: total_match += player_cup.count_matches_revealing(target_value, six_wild)
-	if player_virus < PLAYER_MAX_VIRUS and GameState.assimilation_curse == "double_wild" and target_value not in [1, 3]:
+	if player_virus < PLAYER_MAX_VIRUS and GameState.assimilation_curse == "double_wild" and not _dice_god_final_rule and target_value not in [1, 3]:
 		for die in player_cup.dice:
 			if die.value == 3: total_match += 1
 	if ai1_virus < AI_MAX_VIRUS: total_match += ai_cup_1.count_matches_revealing(target_value, six_wild)
 	if ai2_virus < AI_MAX_VIRUS: total_match += ai_cup_2.count_matches_revealing(target_value, six_wild)
 	if ai3_virus < AI_MAX_VIRUS: total_match += ai_cup_3.count_matches_revealing(target_value, six_wild)
 	# 幸运儿 Lv.3: 他的①不能当万能
-	if target_value != 1 and GameState.get_card_level("lucky_one") >= 3:
+	if target_value != 1 and not _dice_god_final_rule and GameState.get_card_level("lucky_one") >= 3:
 		for lucky_id in _living_card_ais("lucky_one"):
 			var lucky_cup: RefCounted = _get_ai_cup(lucky_id)
 			if lucky_cup:
@@ -890,7 +933,6 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 						total_match -= 1  # 他的①不算万能
 	var bid_true: bool = total_match >= current_bid_count
 	if challenger == "player" and not bid_true:
-		_contract_challenge_success = true
 		if _tutorial_active:
 			GameState.tutorial_completed = true
 			GameState.save_progress()
@@ -941,8 +983,9 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 			_boss_referee_shield_used = true
 			EventBus.hint_show.emit("Boss·终审豁免：免疫本局第一次淘汰", 3.0, Color(0.98, 0.35, 0.35))
 		elif ai_controller_3 and ai_controller_3.infect():
-			ai3_virus = AI_MAX_VIRUS
-			_apply_rust_warrior_skill("ai3", winner)
+			if not _try_advance_dice_god_phase("ai3"):
+				ai3_virus = AI_MAX_VIRUS
+				_apply_rust_warrior_skill("ai3", winner)
 		elif ai_controller_3 and ai_controller_3._bk_saved:
 			ai_controller_3._bk_saved = false; ai_cup_3.add_die()
 			EventBus.hint_show.emit("电池小子备用电源: +1骰!", 3.0, Color(0.52, 0.72, 0.92))
@@ -1229,7 +1272,9 @@ func contract_was_completed() -> bool:
 	match contract_id:
 		"no_item": return GameState.items_used == _contract_start_items_used
 		"bold_bid": return _contract_bold_bid
-		"true_challenge": return _contract_challenge_success
+		"five_twos": return _contract_five_twos
+		"three_faces": return _contract_bid_faces.size() >= 3
+		"three_rounds": return round_number >= 3
 	return false
 
 func set_player_die_value(idx: int, val: int) -> void:

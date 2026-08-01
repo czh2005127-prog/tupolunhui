@@ -10,6 +10,7 @@ var virus_count: int = 0
 var _ai_id: String = ""    # "ai1", "ai2", "ai3"
 var _game: Node = null
 var _six_wild: bool = false  # 双面人: ①和⑥都是万能骰
+var _wild_disabled: bool = false
 var own_hidden_visible: bool = false
 
 func set_ai_id(id: String) -> void:
@@ -20,6 +21,9 @@ func set_dice_game(game: Node) -> void:
 
 func set_six_wild(val: bool) -> void:
 	_six_wild = val
+
+func set_wild_disabled(val: bool) -> void:
+	_wild_disabled = val
 
 var suspicion_of_player: float = 0.0
 var current_bid_count: int = 0
@@ -74,9 +78,10 @@ func _make_opening_bid(my_values: Array) -> Dictionary:
 	for v: int in range(1, 7):
 		if not _bid_is_legal(min_opening, v): continue
 		var probability: float = estimate_bid_truth_probability(min_opening, v, my_values)
-		if probability > best_probability:
-			best_probability = probability; best_val = v
-	_just_bluffed = best_probability < 0.45
+		var score: float = probability + _personality_bid_bonus(min_opening, v, probability, false)
+		if score > best_probability:
+			best_probability = score; best_val = v
+	_just_bluffed = estimate_bid_truth_probability(min_opening, best_val, my_values) < 0.45
 	return {"count": min_opening, "value": best_val}
 
 func _make_evidence_bid(my_values: Array) -> Dictionary:
@@ -105,10 +110,7 @@ func _make_evidence_bid(my_values: Array) -> Dictionary:
 		var probability: float = estimate_bid_truth_probability(candidate.count, candidate.value, my_values)
 		var jump_penalty: float = maxf(0.0, float(candidate.count - current_bid_count - 1)) * 0.12
 		var score: float = probability - jump_penalty + randf_range(-0.025, 0.025)
-		if card:
-			if card.card_id == "lucky_one" and int(candidate.value) == 1: score += 0.08
-			if card.card_id in ["dealer", "casino_owner"] and int(candidate.count) > current_bid_count: score += 0.035
-			if card.card_id == "unknown_chaos": score += randf_range(-0.10, 0.10)
+		score += _personality_bid_bonus(int(candidate.count), int(candidate.value), probability, true)
 		if score > best_score:
 			best_score = score; best = candidate
 	_just_bluffed = estimate_bid_truth_probability(best.count, best.value, my_values) < 0.42
@@ -122,6 +124,7 @@ func _evaluate_challenge() -> bool:
 	var challenge_line: float = clampf(0.25 + rarity * 0.04 + _difficulty_stage * 0.045 + suspicion_of_player * 0.14, 0.22, 0.68)
 	if card and card.card_id in ["jack_crt", "cyclops_lcd", "alliance_oled"] and not player_full_values.is_empty(): challenge_line += 0.05
 	if card and card.card_id in ["battery_kid", "table_ghost"]: challenge_line += 0.035
+	challenge_line += _personality_challenge_adjustment()
 	if cup and cup.dice.size() <= 1: challenge_line += 0.04
 	# Small noise prevents identical cards from becoming perfectly readable while
 	# preserving evidence as the dominant factor.
@@ -149,6 +152,8 @@ func _expected_total_for(value: int, own_values: Array) -> float:
 	return float(_count_for_target(value, own_values) + _count_for_target(value, known_values)) + unknown_count * _unknown_match_probability(value)
 
 func _unknown_match_probability(target: int) -> float:
+	if _wild_disabled:
+		return 1.0 / 6.0
 	if target == 1:
 		return 2.0 / 6.0 if _six_wild else 1.0 / 6.0
 	return 3.0 / 6.0 if _six_wild else 2.0 / 6.0
@@ -177,9 +182,48 @@ func observe_player_bid(was_true: bool) -> void:
 func _count_for_target(target: int, values: Array) -> int:
 	var c: int = 0
 	for v: int in values:
-		if v == target or v == 1: c += 1
+		if v == target: c += 1
+		elif v == 1 and not _wild_disabled: c += 1
 		elif v == 6 and _six_wild: c += 1
 	return c
+
+func _personality_bid_bonus(count: int, value: int, probability: float, is_raise: bool) -> float:
+	if not card: return 0.0
+	var id: String = card.card_id
+	var bonus: float = 0.0
+	match id:
+		"lucky_one":
+			if value == 1: bonus += 0.10
+		"two_face":
+			if value in [1, 6]: bonus += 0.07
+		"dealer", "casino_owner":
+			if is_raise and count > current_bid_count: bonus += 0.04
+		"recycler":
+			if probability >= 0.68: bonus += 0.055
+			if probability < 0.45: bonus -= 0.08
+		"rust_warrior", "battery_kid", "table_ghost":
+			if is_raise: bonus += 0.025
+		"signal_noise", "chamberlain", "unknown_abyss":
+			if is_raise and count > current_bid_count + 1: bonus -= 0.07
+		"jack_crt", "cyclops_lcd", "alliance_oled", "mirror_tech", "prophet":
+			if probability >= 0.72: bonus += 0.035
+		"unknown_chaos":
+			bonus += randf_range(-0.12, 0.12)
+		"dice_god":
+			if _game and value in [int(_game.get("forbidden_number")), int(_game.get("boss_forbidden_number"))]:
+				bonus -= 0.5
+	return bonus
+
+func _personality_challenge_adjustment() -> float:
+	if not card: return 0.0
+	match card.card_id:
+		"jack_crt", "cyclops_lcd", "alliance_oled", "prophet": return 0.045
+		"referee": return 0.075
+		"rust_warrior", "battery_kid", "table_ghost": return 0.025
+		"recycler": return -0.055
+		"chamberlain", "unknown_abyss": return -0.035
+		"unknown_chaos": return randf_range(-0.06, 0.06)
+	return 0.0
 
 func _count_value(target: int, values: Array) -> int:
 	var c: int = 0

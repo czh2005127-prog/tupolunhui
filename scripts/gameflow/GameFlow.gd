@@ -1,5 +1,5 @@
 ## Manages the full game run — stages, nodes, scene transitions.
-## Linear five-node progression: two battles, one shop, one event, then boss.
+## Linear six-node progression: two battles, one shop, two events, then boss.
 extends Control
 
 signal fragment_choice_resolved
@@ -66,8 +66,12 @@ func _generate_nodes() -> void:
 	var key: String = str(current_stage_index)
 	if GameState.stage_node_orders.has(key):
 		nodes_this_stage.assign(GameState.stage_node_orders[key])
+		# Save migration: old runs had one event and five nodes per stage.
+		if nodes_this_stage.size() == 5 and nodes_this_stage.count(NodeType.EVENT) == 1 and nodes_this_stage.back() == NodeType.BOSS:
+			nodes_this_stage.insert(nodes_this_stage.size() - 1, NodeType.EVENT)
+			GameState.stage_node_orders[key] = nodes_this_stage.duplicate()
 		return
-	var prefix: Array = [NodeType.DICE, NodeType.DICE, NodeType.SHOP, NodeType.EVENT]
+	var prefix: Array = [NodeType.DICE, NodeType.DICE, NodeType.SHOP, NodeType.EVENT, NodeType.EVENT]
 	while true:
 		prefix.shuffle()
 		var shop_index: int = prefix.find(NodeType.SHOP)
@@ -129,15 +133,17 @@ func _offer_prisoner_contract(cards: Array) -> void:
 	if (_is_boss_node and current_stage_index == 3) or cards.is_empty() or randf() >= 0.35:
 		return
 	var offers: Array[Dictionary] = [
-		{"id":"no_item", "title":"保持清醒", "desc":"本场不使用任何道具并获胜", "reward_type":"gold", "reward":20},
-		{"id":"bold_bid", "title":"大胆开价", "desc":"至少一次合法叫到存活人数＋4以上并获胜", "reward_type":"item", "reward":"common_random"},
-		{"id":"true_challenge", "title":"揭穿谎言", "desc":"玩家主动质疑成功至少一次并获胜", "reward_type":"gold", "reward":15},
+		{"id":"no_item", "title":"保持清醒", "desc":"本场不使用任何道具并获胜", "reward_type":"gold", "reward":25, "penalty_type":"gold", "penalty":10, "penalty_desc":"扣除10金币"},
+		{"id":"bold_bid", "title":"大胆开价", "desc":"至少一次合法叫到存活人数＋4以上并获胜", "reward_type":"item", "reward":"common_random", "penalty_type":"gold", "penalty":15, "penalty_desc":"扣除15金币"},
+		{"id":"five_twos", "title":"五个二", "desc":"至少一次合法叫到不少于5个②并获胜", "reward_type":"gold", "reward":30, "penalty_type":"gold", "penalty":12, "penalty_desc":"扣除12金币"},
+		{"id":"three_faces", "title":"报遍三面", "desc":"整场合法叫过至少3种不同点数并获胜", "reward_type":"item", "reward":"common_random", "penalty_type":"gold", "penalty":10, "penalty_desc":"扣除10金币"},
+		{"id":"three_rounds", "title":"熬过三轮", "desc":"至少完成3轮质疑结算后再获胜", "reward_type":"gold", "reward":35, "penalty_type":"next_die", "penalty":1, "penalty_desc":"下一场战斗基础骰子−1"},
 	]
 	var contract: Dictionary = offers[randi() % offers.size()].duplicate(true)
-	contract["source"] = cards[randi() % cards.size()].card_name
+	contract["source"] = "无名囚徒"
 	var overlay := ColorRect.new(); overlay.position = Vector2.ZERO; overlay.size = Vector2(1280, 720); overlay.color = Color(0.015, 0.01, 0.025, 0.94); overlay.z_index = 450; add_child(overlay)
-	var title := Label.new(); title.text = "%s 提出交易：%s" % [contract.source, contract.title]; title.position = Vector2(260, 180); title.size = Vector2(760, 50); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 25); overlay.add_child(title)
-	var desc := Label.new(); desc.text = "%s\n奖励：%s" % [contract.desc, "%d金币" % contract.reward if contract.reward_type == "gold" else "1件普通道具"]; desc.position = Vector2(300, 250); desc.size = Vector2(680, 100); desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; desc.add_theme_font_size_override("font_size", 17); overlay.add_child(desc)
+	var title := Label.new(); title.text = "%s提出交易：%s" % [contract.source, contract.title]; title.position = Vector2(260, 155); title.size = Vector2(760, 50); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 25); overlay.add_child(title)
+	var desc := Label.new(); desc.text = "一张没有牌面的囚徒卡从桌底滑出。它不属于本场任何对手。\n\n%s\n奖励：%s　违约：%s" % [contract.desc, "%d金币" % contract.reward if contract.reward_type == "gold" else "1件普通道具", contract.penalty_desc]; desc.position = Vector2(270, 220); desc.size = Vector2(740, 145); desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; desc.add_theme_font_size_override("font_size", 17); overlay.add_child(desc)
 	var accept := Button.new(); accept.text = "接受交易"; accept.position = Vector2(390, 400); accept.size = Vector2(210, 52); accept.pressed.connect(func(): GameState.current_contract = contract.duplicate(true); overlay.queue_free(); contract_choice_resolved.emit()); overlay.add_child(accept)
 	var reject := Button.new(); reject.text = "拒绝"; reject.position = Vector2(680, 400); reject.size = Vector2(210, 52); reject.pressed.connect(func(): overlay.queue_free(); contract_choice_resolved.emit()); overlay.add_child(reject)
 	await contract_choice_resolved
