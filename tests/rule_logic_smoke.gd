@@ -303,6 +303,11 @@ func _test_tutorial_bar_separation() -> void:
 	hud._toggle_tutorial_review()
 	assert(hud.get("_tutorial_review_panel").visible, "教程回顾栏应能独立打开")
 	assert("教程测试" in hud.get("_tutorial_review_text").text)
+	hud._on_dice_revealed([1, 4], [2, 2, 5], [3], [], true, true, false, false)
+	assert("你（2颗）" in hud._get_final_dice_summary() and "（3颗）" in hud._get_final_dice_summary(), "对局结算必须保留最后开骰的数量与点数")
+	hud._show_death_screen()
+	var final_dice_panel = hud.find_child("FinalDiceSummary", true, false)
+	assert(final_dice_panel != null and "最后开骰" in final_dice_panel.text, "死亡结算必须展示最后开骰")
 	GameState.gold = 8
 	GameState.current_contract = {"id": "five_twos", "title": "五个二", "penalty_type": "gold", "penalty": 12}
 	hud.game_ctrl._contract_five_twos = false

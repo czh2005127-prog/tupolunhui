@@ -65,6 +65,7 @@ var _tutorial_focus_nodes: Array[CanvasItem] = []
 var _hint_history: Array[String] = []
 var _history_index: int = 0
 var _last_reveal_text: String = ""  # 骰子揭示文本 (显示在继续按钮上方)
+var _last_reveal_round: int = -1
 
 func _log_event(msg: String) -> void:
 	_hint_history.append(msg)
@@ -1027,21 +1028,22 @@ func _on_dice_revealed(player_vals: Array, ai1_vals: Array, ai2_vals: Array, ai3
 			child.queue_free()
 
 	# Round 1 (no pre-dead): show all. Subsequent rounds: hide only AIs dead BEFORE this round
-	var ai1_name: String = game_ctrl.get_all_ai_names()[0] if game_ctrl else "对手1"
-	var ai2_name: String = game_ctrl.get_all_ai_names()[1] if game_ctrl else "对手2"
-	var ai3_name: String = game_ctrl.get_all_ai_names()[2] if game_ctrl and game_ctrl.get_all_ai_names().size() > 2 else ""
+	var all_names: Array = game_ctrl.get_all_ai_names() if game_ctrl else []
+	var ai1_name: String = str(all_names[0]) if all_names.size() > 0 else "对手1"
+	var ai2_name: String = str(all_names[1]) if all_names.size() > 1 else "对手2"
+	var ai3_name: String = str(all_names[2]) if all_names.size() > 2 else ""
 	var lines: Array[String] = []
-	lines.append("你:  " + _dice_str(player_vals))
+	lines.append(_dice_result_line("你", player_vals))
 	if ai1_was_dead:
 		lines.append("%s:  --已淘汰--" % ai1_name)
 	else:
-		lines.append("%s:  %s" % [ai1_name, _dice_str(ai1_vals)])
+		lines.append(_dice_result_line(ai1_name, ai1_vals))
 	if ai2_was_dead:
 		lines.append("%s:  --已淘汰--" % ai2_name)
 	else:
-		lines.append("%s:  %s" % [ai2_name, _dice_str(ai2_vals)])
+		lines.append(_dice_result_line(ai2_name, ai2_vals))
 	if ai3_name != "":
-		lines.append("%s:  %s" % [ai3_name, _dice_str(ai3_vals)])
+		lines.append(_dice_result_line(ai3_name, ai3_vals))
 
 	var text: String = "\n".join(lines)
 	if game_ctrl and game_ctrl.has_method("get_chaos_reveal_text"):
@@ -1051,6 +1053,37 @@ func _on_dice_revealed(player_vals: Array, ai1_vals: Array, ai2_vals: Array, ai3
 		_notify_label.text = text
 	_hint_history.append(text)
 	_last_reveal_text = text
+	_last_reveal_round = game_ctrl.round_number if game_ctrl else -1
+
+func _dice_result_line(display_name: String, values: Array) -> String:
+	var dice_text: String = _dice_str(values) if not values.is_empty() else "无"
+	return "%s（%d颗）:  %s" % [display_name, values.size(), dice_text]
+
+func _get_final_dice_summary() -> String:
+	if not _last_reveal_text.is_empty() and game_ctrl and _last_reveal_round == game_ctrl.round_number:
+		return _last_reveal_text
+	if not game_ctrl:
+		return "暂无开骰记录"
+	var names: Array = game_ctrl.get_all_ai_names()
+	var lines: Array[String] = [_dice_result_line("你", game_ctrl.player_cup.get_all_values() if game_ctrl.player_cup else [])]
+	var cups: Array = [game_ctrl.ai_cup_1, game_ctrl.ai_cup_2, game_ctrl.ai_cup_3]
+	for i in range(mini(names.size(), cups.size())):
+		var values: Array = cups[i].get_all_values() if cups[i] else []
+		lines.append(_dice_result_line(str(names[i]), values))
+	return "\n".join(lines)
+
+func _add_final_dice_panel(parent: Control, position: Vector2, panel_size: Vector2) -> RichTextLabel:
+	var panel := RichTextLabel.new()
+	panel.name = "FinalDiceSummary"
+	panel.bbcode_enabled = true
+	panel.fit_content = false
+	panel.text = "[b][color=#FFD766]最后开骰[/color][/b]\n" + _get_final_dice_summary()
+	panel.position = position
+	panel.size = panel_size
+	panel.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_theme_font_size_override("normal_font_size", 14)
+	parent.add_child(panel)
+	return panel
 
 func _show_continue_button() -> void:
 	var overlay: Control = Control.new()
@@ -1305,13 +1338,14 @@ func _show_death_screen() -> void:
 		+ "击败Boss: [color=#D4A535]%s[/color]\n" % bosses \
 		+ "获得锈点: [color=#D4A535]%d[/color]\n" % rp \
 		+ "经验: [color=#5cdb9e]+%d XP[/color] (Lv.%d)" % [GameState._run_xp, GameState.player_level]
-	stats.position = Vector2(290, 175); stats.size = Vector2(700, 240)
+	stats.position = Vector2(290, 175); stats.size = Vector2(700, 175)
 	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stats.add_theme_font_size_override("font_size", 16)
 	overlay.add_child(stats)
+	_add_final_dice_panel(overlay, Vector2(290, 345), Vector2(700, 105))
 
 	# XP bar
-	var xp_y: float = 430.0
+	var xp_y: float = 465.0
 	var xp_bg := ColorRect.new()
 	xp_bg.position = Vector2(340, xp_y); xp_bg.size = Vector2(600, 10)
 	xp_bg.color = Color(0.08, 0.08, 0.14)
@@ -1333,7 +1367,7 @@ func _show_death_screen() -> void:
 	xp_lbl.add_theme_color_override("font_color", Color(0.4, 0.5, 0.6))
 	overlay.add_child(xp_lbl)
 
-	var btn_retry: ColorRect = _make_btn_at(overlay, Vector2(340, 480), Vector2(280, 50), "重新挑战", Color(0.36, 0.79, 0.65), true,
+	var btn_retry: ColorRect = _make_btn_at(overlay, Vector2(340, 520), Vector2(280, 50), "重新挑战", Color(0.36, 0.79, 0.65), true,
 		func():
 			overlay.queue_free()
 			_check_and_show_unlocks(func():
@@ -1341,7 +1375,7 @@ func _show_death_screen() -> void:
 				get_tree().change_scene_to_file("res://scenes/gameflow/RunManager.tscn")
 			)
 	)
-	var btn_menu: ColorRect = _make_btn_at(overlay, Vector2(660, 480), Vector2(280, 50), "返回主菜单", Color(0.5, 0.5, 0.5), true,
+	var btn_menu: ColorRect = _make_btn_at(overlay, Vector2(660, 520), Vector2(280, 50), "返回主菜单", Color(0.5, 0.5, 0.5), true,
 		func():
 			overlay.queue_free()
 			_check_and_show_unlocks(func():
@@ -1378,6 +1412,7 @@ func _show_victory_screen(has_elite: bool = false) -> void:
 	rust_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	rust_info.add_theme_font_size_override("font_size", 16)
 	overlay.add_child(rust_info)
+	_add_final_dice_panel(overlay, Vector2(290, 350), Vector2(700, 150))
 
 	# XP bar
 	var xp_y: float = 200.0
