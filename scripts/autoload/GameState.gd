@@ -170,7 +170,7 @@ var tutorial_seen_topics: Array[String] = []
 var selected_forbidden_rules: Array[String] = []
 var active_forbidden_rules: Array[String] = []
 
-const MAX_CONSUMABLE: int = 3
+const MAX_CONSUMABLE: int = 6
 
 func get_bonus_dice_count() -> int:
 	var b: int = _temp_bonus_dice

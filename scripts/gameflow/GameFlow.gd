@@ -70,16 +70,27 @@ func _generate_nodes() -> void:
 		if nodes_this_stage.size() == 5 and nodes_this_stage.count(NodeType.EVENT) == 1 and nodes_this_stage.back() == NodeType.BOSS:
 			nodes_this_stage.insert(nodes_this_stage.size() - 1, NodeType.EVENT)
 			GameState.stage_node_orders[key] = nodes_this_stage.duplicate()
-		return
+		if current_node_index > 0 or _node_order_is_valid(nodes_this_stage):
+			return
 	var prefix: Array = [NodeType.DICE, NodeType.DICE, NodeType.SHOP, NodeType.EVENT, NodeType.EVENT]
 	while true:
 		prefix.shuffle()
 		var shop_index: int = prefix.find(NodeType.SHOP)
 		var first_battle_index: int = prefix.find(NodeType.DICE)
-		if first_battle_index >= 0 and first_battle_index < shop_index:
+		var double_event_opening: bool = prefix[0] == NodeType.EVENT and prefix[1] == NodeType.EVENT
+		if first_battle_index >= 0 and first_battle_index < shop_index and not double_event_opening:
 			break
 	nodes_this_stage = prefix + [NodeType.BOSS]
 	GameState.stage_node_orders[key] = nodes_this_stage.duplicate()
+
+func _node_order_is_valid(order: Array) -> bool:
+	if order.size() != 6 or order.back() != NodeType.BOSS:
+		return false
+	if order.count(NodeType.DICE) != 2 or order.count(NodeType.EVENT) != 2 or order.count(NodeType.SHOP) != 1:
+		return false
+	if order.find(NodeType.DICE) >= order.find(NodeType.SHOP):
+		return false
+	return not (order[0] == NodeType.EVENT and order[1] == NodeType.EVENT)
 
 func _run_node(node_type: int) -> void:
 	for child: Node in get_children():

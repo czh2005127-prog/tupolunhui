@@ -12,6 +12,8 @@ enum Category { INTEL, RESOURCE, RISK, NARRATIVE }
 var _flow: Node
 var _stage: int = 0
 var _pending_discard: bool = false
+var _expected_discard_item: String = ""
+var _choice_resolved: bool = false
 
 func set_parent_flow(f: Node) -> void:
 	_flow = f
@@ -139,6 +141,8 @@ func _get_legacy_pool() -> Array[Dictionary]:
 	]
 
 func _on_choice_a(ev: Dictionary, result_label: Label) -> void:
+	if _choice_resolved: return
+	_choice_resolved = true
 	var r: String = _apply_result(ev, "a")
 	result_label.text = r
 	GameState.event_notification = r
@@ -154,6 +158,8 @@ func _on_choice_a(ev: Dictionary, result_label: Label) -> void:
 	_emit_done()
 
 func _on_choice_b(ev: Dictionary, result_label: Label) -> void:
+	if _choice_resolved: return
+	_choice_resolved = true
 	var r: String = _apply_result(ev, "b")
 	result_label.text = r
 	GameState.event_notification = r
@@ -366,22 +372,27 @@ func _pick_common() -> String:
 	var pool: Array = _filter_by_rarity(0)
 	if pool.is_empty(): return "reroll_stone"
 	var pick: String = pool[randi() % pool.size()]
-	GameState.add_consumable_item(pick)
+	_grant_event_item(pick)
 	return pick
 
 func _pick_rare() -> String:
 	var pool: Array = _filter_by_rarity(1)
 	if pool.is_empty(): return "freeze_die"
 	var pick: String = pool[randi() % pool.size()]
-	GameState.add_consumable_item(pick)
+	_grant_event_item(pick)
 	return pick
 
 func _pick_legendary() -> String:
 	var pool: Array = _filter_by_rarity(2)
 	if pool.is_empty(): return "fate_die"
 	var pick: String = pool[randi() % pool.size()]
-	GameState.add_consumable_item(pick)
+	_grant_event_item(pick)
 	return pick
+
+func _grant_event_item(item_id: String) -> void:
+	_expected_discard_item = item_id
+	if GameState.add_consumable_item(item_id):
+		_expected_discard_item = ""
 
 func _filter_by_rarity(rarity: int) -> Array[String]:
 	var result: Array[String] = []
@@ -414,6 +425,8 @@ func _emit_done() -> void:
 		_flow.emit_node_done()
 
 func _on_discard_prompt(new_item_id: String) -> void:
+	if new_item_id != _expected_discard_item:
+		return
 	_pending_discard = true
 	var popup := Panel.new()
 	popup.position = Vector2(290, 440); popup.size = Vector2(700, 220)
@@ -432,6 +445,7 @@ func _on_discard_prompt(new_item_id: String) -> void:
 		button.pressed.connect(func():
 			GameState.force_swap_consumable(new_item_id, idx)
 			_pending_discard = false
+			_expected_discard_item = ""
 			popup.queue_free()
 			EventBus.discard_resolved.emit())
 		popup.add_child(button)
@@ -440,6 +454,7 @@ func _on_discard_prompt(new_item_id: String) -> void:
 	cancel.position = Vector2(250, 130); cancel.size = Vector2(200, 44)
 	cancel.pressed.connect(func():
 		_pending_discard = false
+		_expected_discard_item = ""
 		popup.queue_free()
 		EventBus.discard_resolved.emit())
 	popup.add_child(cancel)

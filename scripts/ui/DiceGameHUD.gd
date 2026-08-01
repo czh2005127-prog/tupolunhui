@@ -839,7 +839,7 @@ func setup_with_flow(stage: Resource, flow: Node, param3: Variant = null) -> voi
 	if opponent_face3 and opponent_face3.get_parent(): opponent_face3.visible = is_boss
 
 func _adjust_count(delta: int) -> void:
-	_bid_count = clampi(_bid_count + delta, 1, 20)
+	_bid_count = clampi(_bid_count + delta, 1, 99)
 	_refresh_adjust_labels()
 
 ## Add 3rd opponent (boss) — 3 AIs share the big opponent area (same height 420, equal width)
@@ -904,7 +904,16 @@ func _is_current_bid_valid() -> bool:
 		return false
 	if _bid_value < 1 or _bid_value > 6 or _bid_count < 1:
 		return false
-	return game_ctrl._is_valid_bid(_bid_count, _bid_value)
+	return game_ctrl.is_player_bid_valid(_bid_count, _bid_value)
+
+func _select_legal_bid() -> void:
+	if not game_ctrl or _is_current_bid_valid():
+		return
+	var legal: Dictionary = game_ctrl.find_legal_player_bid(_bid_count, _bid_value)
+	if legal.is_empty():
+		return
+	_bid_count = int(legal.count)
+	_bid_value = int(legal.value)
 
 func _on_round_started() -> void:
 	_game_over_winner = ""
@@ -913,6 +922,7 @@ func _on_round_started() -> void:
 			child.queue_free()
 	_bid_count = game_ctrl.get_min_opening()
 	_bid_value = max(2, game_ctrl.current_bid_value)
+	_select_legal_bid()
 	if bid_display:
 		bid_display.text = "开局"
 	_refresh_adjust_labels()
@@ -957,6 +967,7 @@ func _on_turn_changed(player: String) -> void:
 				_set_tutorial_focus("bid")
 		if game_ctrl.current_bid_count > 0:
 			_bid_count = max(game_ctrl.current_bid_count + 1, _bid_count)
+		_select_legal_bid()
 		_refresh_adjust_labels()
 		_show_actions(true)
 		_update_dice_display()
@@ -988,6 +999,7 @@ func _on_bid_updated(count: int, value: int, player: String) -> void:
 		# Update opponent bid text (no expression animation)
 	_bid_count = count + 1
 	_bid_value = value
+	_select_legal_bid()
 	# 较为夸张的叫牌 → 所有 AI 惊讶
 	var total_dice: int = 10  # default 1v1: 5+5
 	if game_ctrl:
@@ -1605,13 +1617,17 @@ func _on_return_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn")
 
 func _on_challenge_pressed() -> void:
-	game_ctrl.player_challenge()
+	if not game_ctrl.player_challenge():
+		return
 	for c in [game_ctrl.ai_controller_1, game_ctrl.ai_controller_2, game_ctrl.ai_controller_3]:
 		if c and c.has_method("on_player_action"):
 			c.on_player_action("challenge")
 
 func _on_bid_pressed() -> void:
-	game_ctrl.player_bid(_bid_count, _bid_value)
+	if not game_ctrl.player_bid(_bid_count, _bid_value):
+		_select_legal_bid()
+		_refresh_adjust_labels()
+		return
 	for c in [game_ctrl.ai_controller_1, game_ctrl.ai_controller_2, game_ctrl.ai_controller_3]:
 		if c and c.has_method("on_player_action"):
 			c.on_player_action("raise")
@@ -2073,7 +2089,7 @@ func _on_card_skill_triggered(card_id: String, skill_name: String, target: Strin
 		"prophet": card_display = "算法先知"
 		"abyss": card_display = "深渊"
 	_notify_label.text = "[%s] %s → %s" % [card_display, skill_name, target]
-	_hint_history.append(_notify_label.bbcode_enabled and _notify_label.text or _notify_label.text)
+	_hint_history.append(_notify_label.text)
 
 ## 显示通用提示（来自 EventBus.hint_show）
 func _on_hint_show(message: String, duration: float, color: Color) -> void:
@@ -2505,17 +2521,18 @@ func _play_dice_animation() -> void:
 				lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
 
 	# Phase 1: Shake (0.25s) — vibrate each die in place
-	var shake_tween := create_tween()
-	shake_tween.set_parallel(true)
+	var last_shake_tween: Tween = null
 	for b: ColorRect in active_boxes:
 		var orig := b.position
 		var bt := create_tween()
+		last_shake_tween = bt
 		for _s: int in range(6):
 			var sx: float = orig.x + rng.randf_range(-8.0, 8.0)
 			var sy: float = orig.y + rng.randf_range(-5.0, 5.0)
 			bt.tween_property(b, "position", Vector2(sx, sy), 0.035)
 		bt.tween_property(b, "position", orig, 0.04)
-	await shake_tween.finished
+	if last_shake_tween:
+		await last_shake_tween.finished
 
 	# Brief pause
 	await get_tree().create_timer(0.05).timeout

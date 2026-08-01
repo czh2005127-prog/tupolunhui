@@ -19,6 +19,7 @@ func _ready() -> void:
 	_test_card_draw_runtime_types()
 	_test_pair_fix()
 	_test_fragment_inventory()
+	_test_six_item_capacity()
 	_test_three_stage_curve()
 	_test_upgrade_migration()
 	_test_battle_entry_snapshot()
@@ -28,9 +29,11 @@ func _ready() -> void:
 	_test_random_stage_nodes()
 	_test_forbidden_rewards_and_payout()
 	_test_prisoner_contract_objectives()
+	_test_event_gold_does_not_request_item_swap()
 	_test_shop_build()
 	await _test_tutorial_bar_separation()
 	_test_ai_probability_logic()
+	_test_cyclops_keeps_legal_player_bid()
 	_test_growth_curse()
 	await _test_rust_workshop_rebuild()
 	await _test_duplicate_dealers()
@@ -86,6 +89,14 @@ func _test_fragment_inventory() -> void:
 	assert(GameState.replace_boss_fragment(0, "referee"))
 	assert(GameState.boss_fragments == ["referee", "lucky_one"])
 	assert(GameState.add_boss_fragment("dice_god") == "invalid", "骰子之神不能产出碎片")
+
+func _test_six_item_capacity() -> void:
+	var old_items: Array[String] = GameState.consumable_items.duplicate()
+	GameState.consumable_items.clear()
+	for i in range(GameState.MAX_CONSUMABLE):
+		assert(GameState.add_consumable_item("test_item_%d" % i))
+	assert(GameState.MAX_CONSUMABLE == 6 and GameState.consumable_items.size() == 6)
+	GameState.consumable_items.assign(old_items)
 
 func _test_three_stage_curve() -> void:
 	GameState.card_levels["jack_crt"] = 3
@@ -199,6 +210,13 @@ func _test_event_score_weight() -> void:
 
 func _test_random_stage_nodes() -> void:
 	GameState.stage_node_orders.clear()
+	for _sample in range(100):
+		var sampled_flow = GameFlowScript.new()
+		sampled_flow.current_stage_index = 0
+		sampled_flow._generate_nodes()
+		assert(not (sampled_flow.nodes_this_stage[0] == GameFlowScript.NodeType.EVENT and sampled_flow.nodes_this_stage[1] == GameFlowScript.NodeType.EVENT), "每层不得连续两个事件开场")
+		sampled_flow.free()
+		GameState.stage_node_orders.clear()
 	var flow = GameFlowScript.new()
 	flow.current_stage_index = 0
 	flow._generate_nodes()
@@ -249,6 +267,18 @@ func _test_prisoner_contract_objectives() -> void:
 	assert(game.contract_was_completed())
 	GameState.current_contract.clear()
 	game.free()
+
+func _test_event_gold_does_not_request_item_swap() -> void:
+	var old_items: Array[String] = GameState.consumable_items.duplicate()
+	var old_gold: int = GameState.gold
+	GameState.consumable_items.assign(["a", "b", "c", "d", "e", "f"])
+	var event_ui = EventUIScript.new()
+	event_ui._apply_result({"id": "memory_fragment", "type": EventUIScript.Category.NARRATIVE}, "b")
+	assert(GameState.gold == old_gold + 25)
+	assert(not event_ui._pending_discard and event_ui._expected_discard_item.is_empty(), "纯金币事件不得触发道具替换")
+	event_ui.free()
+	GameState.gold = old_gold
+	GameState.consumable_items.assign(old_items)
 
 func _test_shop_build() -> void:
 	var old_seen: bool = GameState.tutorial_shop_seen
@@ -307,6 +337,17 @@ func _test_ai_probability_logic() -> void:
 	ai.current_bid_count = 6; ai.current_bid_value = 2
 	var bid: Dictionary = ai.make_bid()
 	assert(int(bid.count) <= 9, "没有充分证据时AI不应一次把数量抬得过大")
+
+func _test_cyclops_keeps_legal_player_bid() -> void:
+	var old_curse: String = GameState.assimilation_curse
+	GameState.assimilation_curse = "double_wild"
+	var game = DiceGameScript.new()
+	game._cyclops_locks.assign([2, 4, 5, 6])
+	game._ensure_player_callable_face()
+	var legal: Dictionary = game.find_legal_player_bid(game.get_min_opening(), 2)
+	assert(not legal.is_empty() and int(legal.value) not in [1, 3] and int(legal.value) not in game._cyclops_locks, "独眼龙与禁叫效果叠加后必须保留合法叫牌")
+	game.free()
+	GameState.assimilation_curse = old_curse
 
 func _test_growth_curse() -> void:
 	var game = DiceGameScript.new()

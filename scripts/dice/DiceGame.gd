@@ -572,6 +572,7 @@ func _start_round() -> void:
 					local_locks.append(new_lock)
 				if new_lock not in _cyclops_locks and _cyclops_locks.size() < 5:
 					_cyclops_locks.append(new_lock)
+		_ensure_player_callable_face()
 		if _cyclops_locks.size() > 0:
 			_cyclops_lock = _cyclops_locks[0]
 			EventBus.hint_show.emit("独眼龙·锁定: 本局不能叫 %s" % str(_cyclops_locks), 4.0, Color(0.52, 0.72, 0.92))
@@ -638,6 +639,36 @@ func _is_valid_bid(count: int, value: int) -> bool:
 	if GameState.current_stage == 2 and current_bid_value == infectious_number and value != infectious_number:
 		return false
 	return count > current_bid_count or (count == current_bid_count and value > current_bid_value)
+
+func _ensure_player_callable_face() -> void:
+	var player_forbidden: Array[int] = []
+	if GameState.assimilation_curse == "double_wild":
+		player_forbidden.assign([1, 3])
+	for value in range(1, 7):
+		if value not in _cyclops_locks and value not in player_forbidden:
+			return
+	for value in range(1, 7):
+		if value in _cyclops_locks and value not in player_forbidden:
+			_cyclops_locks.erase(value)
+			return
+
+func is_player_bid_valid(count: int, value: int) -> bool:
+	if GameState.assimilation_curse == "double_wild" and value in [1, 3]:
+		return false
+	return _is_valid_bid(count, value)
+
+func find_legal_player_bid(start_count: int, preferred_value: int) -> Dictionary:
+	var minimum_count: int = get_min_opening() if current_bid_count == 0 else current_bid_count
+	var first_count: int = maxi(start_count, minimum_count)
+	var values: Array[int] = [preferred_value]
+	for value in range(1, 7):
+		if value not in values:
+			values.append(value)
+	for count in range(first_count, first_count + 32):
+		for value in values:
+			if is_player_bid_valid(count, value):
+				return {"count": count, "value": value}
+	return {}
 
 func _infect_player() -> bool:
 	if GameState.has_boss_fragment("table_ghost") and not _fragment_ghost_used:
@@ -751,8 +782,7 @@ func _sanitize_ai_bid(proposed: Dictionary) -> Dictionary:
 ## Player actions
 func player_bid(count: int, value: int) -> bool:
 	if not game_active or current_player != "player": return false
-	if GameState.assimilation_curse == "double_wild" and value in [1, 3]: return false
-	if not _is_valid_bid(count, value): return false
+	if not is_player_bid_valid(count, value): return false
 	if _tutorial_active and not _tutorial_opening_done:
 		_tutorial_opening_done = true
 		_tutorial_forced_bids_remaining = _living_ai_count()

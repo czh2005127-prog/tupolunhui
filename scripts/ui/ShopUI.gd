@@ -18,7 +18,7 @@ func set_parent_flow(f: Node) -> void:
 		_show_shop_tutorial()
 
 func _show_shop_tutorial() -> void:
-	var banner := Label.new(); banner.name = "TutorialBanner"; banner.text = "商店：金币购买一次性道具，最多携带3个。也可刷新货架，或尝试两次店内赌桌。"; banner.position = Vector2(250, 650); banner.size = Vector2(780, 38); banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; banner.add_theme_font_size_override("font_size", 15); banner.add_theme_color_override("font_color", Color(0.36, 0.79, 0.65)); add_child(banner)
+	var banner := Label.new(); banner.name = "TutorialBanner"; banner.text = "商店：金币购买一次性道具，最多携带6个。也可刷新货架，或尝试两次店内赌桌。"; banner.position = Vector2(250, 650); banner.size = Vector2(780, 38); banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; banner.add_theme_font_size_override("font_size", 15); banner.add_theme_color_override("font_color", Color(0.36, 0.79, 0.65)); add_child(banner)
 	var highlighted: CanvasItem = null
 	for item in GameState.shop_items:
 		if item.price <= GameState.gold:
