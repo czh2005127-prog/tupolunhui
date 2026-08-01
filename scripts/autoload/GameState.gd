@@ -435,7 +435,9 @@ func setup_new_run() -> void:
 	current_battle_seed = 0
 	stage_node_orders.clear()
 	current_contract.clear()
-	active_forbidden_rules = selected_forbidden_rules.duplicate() if has_cleared_game else []
+	active_forbidden_rules.clear()
+	if has_cleared_game:
+		active_forbidden_rules.assign(selected_forbidden_rules)
 	_clear_save()
 
 ## Freeze the run at the moment after opponents are chosen but before battle setup

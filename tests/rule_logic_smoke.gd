@@ -9,10 +9,12 @@ const GameFlowScript := preload("res://scripts/gameflow/GameFlow.gd")
 const ShopUIScript := preload("res://scripts/ui/ShopUI.gd")
 const MainMenuScript := preload("res://scripts/ui/MainMenu.gd")
 const CardDrawUIScript := preload("res://scripts/ui/CardDrawUI.gd")
+const RustWorkshopScript := preload("res://scripts/ui/RustWorkshop.gd")
 
 func _ready() -> void:
 	GameState.tutorial_completed = true
 	_test_dynamic_candidates()
+	_test_card_draw_runtime_types()
 	_test_pair_fix()
 	_test_fragment_inventory()
 	_test_three_stage_curve()
@@ -23,6 +25,7 @@ func _ready() -> void:
 	_test_shop_build()
 	_test_ai_probability_logic()
 	_test_growth_curse()
+	await _test_rust_workshop_rebuild()
 	await _test_duplicate_dealers()
 	await _test_boss_dealer()
 	print("RULE_LOGIC_SMOKE_OK")
@@ -49,6 +52,10 @@ func _test_dynamic_candidates() -> void:
 	for card in initial_pool:
 		if card.rarity == CardDataScript.Rarity.UNKNOWN: has_unknown = true
 	assert(has_unknown, "混合牌堆必须注入未知卡")
+
+func _test_card_draw_runtime_types() -> void:
+	assert(CardPoolScript.draw_cards(0, false).size() == 2)
+	assert(CardPoolScript.draw_cards(0, true).size() == 3)
 
 func _test_pair_fix() -> void:
 	var game = DiceGameScript.new()
@@ -155,6 +162,15 @@ func _test_shop_build() -> void:
 	remove_child(shop)
 	shop.free()
 	GameState.tutorial_shop_seen = old_seen
+
+func _test_rust_workshop_rebuild() -> void:
+	var workshop = RustWorkshopScript.new()
+	add_child(workshop)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await workshop._build()
+	remove_child(workshop)
+	workshop.free()
 
 func _test_ai_probability_logic() -> void:
 	var ai_script := preload("res://scripts/ai/AiController.gd")

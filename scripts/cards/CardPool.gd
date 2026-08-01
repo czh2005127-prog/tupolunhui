@@ -70,8 +70,8 @@ static func get_boss_pool(stage: int) -> Array:
 ## Draw N cards from a mixed pool (rarity_pool + 1 random unknown) + optional pure rarity pool.
 static func draw_cards(stage: int, is_boss: bool) -> Array[CardData]:
 	var result: Array[CardData] = []
-	var rarity_pool_a: Array[CardData] = get_mixed_pool(stage, is_boss)
-	var pure_pool_b: Array[CardData] = get_boss_pool(stage) if is_boss else []
+	var rarity_pool_a: Array = get_mixed_pool(stage, is_boss)
+	var pure_pool_b: Array = get_boss_pool(stage) if is_boss else []
 
 	# Draw 2 from mixed pool
 	_draw_from_pool(rarity_pool_a, 2, result)
@@ -83,10 +83,10 @@ static func draw_cards(stage: int, is_boss: bool) -> Array[CardData]:
 	return result
 
 ## Draw count cards from pool into result, allowing max 2 of same card
-static func _draw_from_pool(pool: Array[CardData], count: int, result: Array[CardData]) -> void:
+static func _draw_from_pool(pool: Array, count: int, result: Array[CardData]) -> void:
 	for _i in range(count):
 		if pool.is_empty(): return
-		var card := pool[randi() % pool.size()]
+		var card: CardData = pool[randi() % pool.size()]
 		var same_count: int = 0
 		for c in result:
 			if c.card_id == card.card_id:

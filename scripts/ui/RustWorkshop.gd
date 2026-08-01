@@ -65,8 +65,7 @@ func _build() -> void:
 	_scroll_container.add_child(_grid_parent)
 
 	_draw_grid()
-	var back := _make_btn(Vector2(GRID_X, GRID_Y + 4 * (CARD_H + GAP) + 10), Vector2(100, 36), "返回", Color(0.35, 0.35, 0.38), _on_back)
-	_grid_parent.add_child(back)
+	var back := _make_btn(Vector2(GRID_X, GRID_Y + 4 * (CARD_H + GAP) + 10), Vector2(100, 36), "返回", Color(0.35, 0.35, 0.38), _on_back, _grid_parent)
 
 	var top_back := _make_btn(Vector2(1150, 56), Vector2(80, 28), "返回", Color(0.35, 0.35, 0.38), _on_back)
 
