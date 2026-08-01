@@ -10,6 +10,7 @@ var virus_count: int = 0
 var _ai_id: String = ""    # "ai1", "ai2", "ai3"
 var _game: Node = null
 var _six_wild: bool = false  # 双面人: ①和⑥都是万能骰
+var own_hidden_visible: bool = false
 
 func set_ai_id(id: String) -> void:
 	_ai_id = id
@@ -28,9 +29,9 @@ var player_full_values: Array = []
 var min_opening: int = 3
 var _just_bluffed: bool = false
 var is_eliminated: bool = false
-var _dealer_opening_count: int = 0  # Set by DiceGame if this AI is 庄家
 var _peeked_player_value: int = 0  # 老杰克 偷窥 peeked value (0 = not used yet)
 var _peek_uses: int = 0  # remaining peeks this game (Lv.2+ = 2 uses)
+var _peek_initialized: bool = false
 var _bk_saved: bool = false  # 电池小子 Lv.3 triggered
 
 # Card-derived behavior params
@@ -55,11 +56,11 @@ func decide_action() -> String:
 
 func _try_use_item() -> void:
 	if not _game or not _game.has_method("use_chamberlain_item"): return
-	if _game.get_chamberlain_ai() == _ai_id and _game.get_chamberlain_items().size() > 0:
-		_game.use_chamberlain_item()
+	if _game.get_chamberlain_items(_ai_id).size() > 0:
+		_game.use_chamberlain_item(_ai_id)
 
 func make_bid() -> Dictionary:
-	var my_values: Array = cup.get_values()
+	var my_values: Array = cup.get_all_values() if own_hidden_visible else cup.get_values()
 	if current_bid_count == 0:
 		return _make_opening_bid(my_values)
 	var should_bluff: bool = randf() < bluff_frequency
@@ -74,10 +75,7 @@ func _make_opening_bid(my_values: Array) -> Dictionary:
 		if c > best_cnt: best_cnt = c; best_val = v
 	if best_val == 1 and best_cnt >= 1:
 		return {"count": max(min_opening, best_cnt + 1), "value": 1}
-	# 庄家: opening count floor = total_dice / 2
-	var min_c: int = maxi(min_opening, _dealer_opening_count)
-	_dealer_opening_count = 0
-	return {"count": maxi(min_c, best_cnt + 1), "value": best_val}
+	return {"count": maxi(min_opening, best_cnt + 1), "value": best_val}
 
 func _make_bluff_bid(my_values: Array) -> Dictionary:
 	_just_bluffed = true
@@ -96,7 +94,8 @@ func _make_honest_bid(my_values: Array) -> Dictionary:
 
 func _evaluate_challenge() -> bool:
 	if current_bid_count == 0: return false
-	var my_count: int = _count_for_target(current_bid_value, cup.get_values())
+	var own_values: Array = cup.get_all_values() if own_hidden_visible else cup.get_values()
+	var my_count: int = _count_for_target(current_bid_value, own_values)
 	var extra: int = 0
 	if player_full_values.size() > 0:
 		extra = _count_for_target(current_bid_value, player_full_values)
@@ -130,29 +129,27 @@ func infect() -> bool:
 		return false
 	# 电池小子：前N次被击败免死 (Lv.3=每次+1骰)
 	var bk_lv: int = GameState.get_card_level("battery_kid")
-	var free_infections: int = 1 + bk_lv
+	var free_infections: int = mini(3, 1 + bk_lv)
 	if card.card_id == "battery_kid" and virus_count < free_infections:
 		virus_count += 1
 		if bk_lv >= 3:
 			_bk_saved = true  # Signal DiceGame to add a die
 		return false  # 免疫本次感染
 	virus_count += 1
-	if virus_count >= (1 if GameState.current_stage < 3 else 2):
-		is_eliminated = true
+	is_eliminated = true
 	return true
 
 ## 老杰克 偷窥: peek player dice once per battle (Lv.1=2 dice, Lv.2=2 uses, Lv.3=3 dice+公开)
-func peek_player_dice(count: int) -> Array[int]:
+func peek_player_dice(count: int, available_values: Array) -> Array[int]:
 	if _peek_uses <= 0 or card.card_id != "jack_crt":
 		return []
-	if player_full_values.is_empty():
-		player_full_values = []
 	_peek_uses -= 1
 	var result: Array[int] = []
-	for _i in range(min(count, player_full_values.size())):
-		var idx: int = randi() % player_full_values.size()
-		var v: int = player_full_values[idx]
-		player_full_values.remove_at(idx)
+	var candidates: Array = available_values.duplicate()
+	for _i in range(min(count, candidates.size())):
+		var idx: int = randi() % candidates.size()
+		var v: int = candidates[idx]
+		candidates.remove_at(idx)
 		result.append(v)
 	if result.size() > 0:
 		_peeked_player_value = result[0]

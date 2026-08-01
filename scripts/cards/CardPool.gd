@@ -1,100 +1,72 @@
 ## Card pool — dual-deck drawing system.
 ## Mixes rarity pools with a random unknown card for each draw.
-## Unlocked cards are filtered; unknown/genesis always pass.
-## Boss stages show exactly 2+1 cards; normal stages show 2+1 (with 1 unknown).
+## Unlocked cards are filtered; unknown/genesis are injected by their dedicated decks.
 class_name CardPool
 extends RefCounted
 
 const CardDataRef := preload("res://scripts/resources/CardData.gd")
 
-## Display counts per card draw screen
-const SHOW_MIXED: int = 2    # rarity-pool cards shown (e.g., 2 common)
-const SHOW_BOSS: int = 3     # boss-pool cards shown — pick 1
+const MIN_CANDIDATES: int = 3
+const MAX_CANDIDATES: int = 5
 
 static func _filter_unlocked(pool: Array) -> Array:
 	var result: Array = []
-	for c in pool:
-		var card: CardData = c
-		if card.rarity >= CardData.Rarity.GENESIS:
-			result.append(c)  # unknown / genesis: always available
-		elif card.card_id in GameState.unlocked_cards:
-			result.append(c)
+	for card in pool:
+		if card and card.card_id in GameState.unlocked_cards:
+			result.append(card)
 	return result
 
-## Pick exactly [param count] random cards from [param pool] (no duplicates).
-## Pads with common cards if pool is too small.
+## Pick exactly [param count] cards; the same card may appear at most twice.
 static func _pick_from(pool: Array, count: int) -> Array:
 	var result: Array = []
 	var source: Array = _filter_unlocked(pool)
 	if source.is_empty():
-		# Fallback: use any common cards
-		source = _filter_unlocked(CardDataRef.get_common_pool())
-	if source.is_empty():
 		return result
-	var shuffled: Array = source.duplicate()
-	shuffled.shuffle()
-	for i in range(min(count, shuffled.size())):
-		result.append(shuffled[i])
+	var occurrences: Dictionary = {}
+	while result.size() < count:
+		var candidates: Array = []
+		for card in source:
+			if int(occurrences.get(card.card_id, 0)) < 2:
+				candidates.append(card)
+		if candidates.is_empty(): break
+		var picked = candidates[randi() % candidates.size()]
+		result.append(picked)
+		occurrences[picked.card_id] = int(occurrences.get(picked.card_id, 0)) + 1
 	return result
 
 ## Get mixed pool for manual card selection.
-## Normal stage: [SHOW_MIXED] rarity cards + 1 unknown.
-## Boss stage:   [SHOW_MIXED] rarity cards only (no unknown — boss adds its own pool).
+## Candidate count follows unlocked cards: 3 initially, growing to at most 5.
+## One slot is occupied by the injected unknown card.
 static func get_mixed_pool(stage: int, is_boss: bool = false) -> Array:
-	var rarity_pool: Array
+	var full_rarity_pool: Array
 	match stage:
-		0: rarity_pool = _filter_unlocked(CardDataRef.get_common_pool())
-		1: rarity_pool = _filter_unlocked(CardDataRef.get_rare_pool())
-		2: rarity_pool = _filter_unlocked(CardDataRef.get_epic_pool())
-		3: rarity_pool = _filter_unlocked(CardDataRef.get_legendary_pool())
-		_: rarity_pool = _filter_unlocked(CardDataRef.get_common_pool())
-	var picked: Array = _pick_from(rarity_pool, SHOW_MIXED)
-	if not is_boss:
-		var unknown := CardDataRef.get_unknown_pool()
-		if unknown.size() > 0:
-			picked.append(unknown[randi() % unknown.size()])
+		0: full_rarity_pool = CardDataRef.get_common_pool()
+		1: full_rarity_pool = CardDataRef.get_rare_pool()
+		2: full_rarity_pool = CardDataRef.get_epic_pool()
+		3: full_rarity_pool = CardDataRef.get_legendary_pool()
+		_: full_rarity_pool = CardDataRef.get_common_pool()
+	var rarity_pool: Array = _filter_unlocked(full_rarity_pool)
+	var candidate_count: int = clampi(rarity_pool.size(), MIN_CANDIDATES, MAX_CANDIDATES)
+	var picked: Array = _pick_from(full_rarity_pool, candidate_count - 1)
+	var unknown := CardDataRef.get_unknown_pool()
+	if unknown.size() > 0:
+		picked.append(unknown[randi() % unknown.size()])
 	return picked
 
-## Get boss-only extra pool. Returns up to [SHOW_BOSS] cards.
-## Stage N boss = mixed(N) + mixed(N+1 rarity). NO common fallback.
-## If next-rarity pool is empty, fallback to current rarity (mixed N) — never show empty.
+## Get boss-only extra pool. Returns 3-5 unlocked candidates, except the single genesis card.
+## Boss pool follows the design document exactly:
+## stage 1 = epic, stage 2 = legendary, stage 3 = legendary, stage 4 = genesis.
 static func get_boss_pool(stage: int) -> Array:
 	if stage == 3:
 		return CardDataRef.get_genesis_pool()
-	var next_rarity: Array = []
+	var full_next_rarity: Array = []
 	match stage:
-		0: next_rarity = _filter_unlocked(CardDataRef.get_rare_pool())
-		1: next_rarity = _filter_unlocked(CardDataRef.get_epic_pool())
-		2: next_rarity = _filter_unlocked(CardDataRef.get_legendary_pool())
-	if next_rarity.size() >= SHOW_BOSS:
-		var shuffled: Array = next_rarity.duplicate()
-		shuffled.shuffle()
-		var result: Array = []
-		for i in range(min(SHOW_BOSS, shuffled.size())):
-			result.append(shuffled[i])
-		return result
-	# Fallback: use current tier (mixed N)
-	if next_rarity.size() > 0:
-		var fb: Array = next_rarity.duplicate()
-		fb.shuffle()
-		var result2: Array = []
-		for i in range(min(SHOW_BOSS, fb.size())):
-			result2.append(fb[i])
-		return result2
-	# Last fallback: current stage rarity
-	var current_tier: Array = []
-	match stage:
-		0: current_tier = _filter_unlocked(CardDataRef.get_common_pool())
-		1: current_tier = _filter_unlocked(CardDataRef.get_rare_pool())
-		2: current_tier = _filter_unlocked(CardDataRef.get_epic_pool())
-	if current_tier.is_empty():
-		return []
-	var csh: Array = current_tier.duplicate()
-	csh.shuffle()
-	var result3: Array = []
-	for i in range(min(SHOW_BOSS, csh.size())):
-		result3.append(csh[i])
-	return result3
+		0: full_next_rarity = CardDataRef.get_epic_pool()
+		1, 2: full_next_rarity = CardDataRef.get_legendary_pool()
+	var unlocked: Array = _filter_unlocked(full_next_rarity)
+	if unlocked.is_empty(): return []
+	var candidate_count: int = clampi(unlocked.size(), MIN_CANDIDATES, MAX_CANDIDATES)
+	return _pick_from(full_next_rarity, candidate_count)
 
 ## Draw N cards from a mixed pool (rarity_pool + 1 random unknown) + optional pure rarity pool.
 static func draw_cards(stage: int, is_boss: bool) -> Array[CardData]:
@@ -148,26 +120,25 @@ static func get_unknown_card(cards: Array[CardData]) -> CardData:
 static func get_battle_gold(stage: int) -> int:
 	return GameState.get_stage_gold(stage)
 
-## Generate a random item (80% common, 20% epic) for elite reward
+## Generate a random item (80% common, 20% rare) for elite reward.
 static func get_elite_item() -> String:
-	var pool: Array = ItemData.get_consumable_pool()
-	var item: Resource
-	if randf() < 0.2:
-		var epics: Array = []
-		for i in pool:
-			var it := i as ItemData
-			if it.rarity >= ItemData.Rarity.RARE:
-				epics.append(it)
-		if epics.is_empty():
-			epics = pool
-		item = epics[randi() % epics.size()]
-	else:
-		item = pool[randi() % pool.size()]
+	var pool: Array = ItemData.get_unlocked_pool()
+	if pool.is_empty(): pool = ItemData.get_consumable_pool()
+	var common: Array = []
+	var rare: Array = []
+	for i in pool:
+		var it := i as ItemData
+		if it.rarity == ItemData.Rarity.COMMON: common.append(it)
+		elif it.rarity == ItemData.Rarity.RARE: rare.append(it)
+	var selected_pool: Array = rare if randf() < 0.2 else common
+	if selected_pool.is_empty(): selected_pool = pool
+	var item: Resource = selected_pool[randi() % selected_pool.size()]
 	return item.item_id
 
 ## Get a legendary item for boss reward
 static func get_legendary_item() -> String:
-	var pool: Array = ItemData.get_consumable_pool()
+	var pool: Array = ItemData.get_unlocked_pool()
+	if pool.is_empty(): pool = ItemData.get_consumable_pool()
 	var legendaries: Array = []
 	for i in pool:
 		var it := i as ItemData

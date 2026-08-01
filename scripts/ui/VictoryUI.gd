@@ -16,7 +16,6 @@ func _ready() -> void:
 		GameState.has_cleared_game = true
 		GameState.save_progress()
 	await _play_narrative()
-	_build()
 
 func _play_narrative() -> void:
 	var bg: ColorRect = ColorRect.new()
@@ -103,11 +102,11 @@ func _play_narrative() -> void:
 	var sy: int = 240
 	var boss_names: Array = ["老杰克", "独眼龙", "三人组", "骰子之神"]
 	for i in range(boss_names.size()):
-		var cleared: bool = i in GameState.stages_cleared
+		var cleared: bool = i < GameState.bosses_defeated.size()
 		_add_stat_line(sy, "击败 Boss: %s" % boss_names[i], "✓" if cleared else "✗", Color(0.36, 0.79, 0.65) if cleared else Color(0.5, 0.15, 0.15))
 		sy += 30
 
-	_add_stat_line(sy, "感染次数", str(GameState.total_infections), Color(1, 1, 1))
+	_add_stat_line(sy, "感染次数", str(GameState.total_assimilations), Color(1, 1, 1))
 	sy += 30
 	_add_stat_line(sy, "事件完成", str(GameState.events_completed), Color(1, 1, 1))
 	sy += 30
@@ -118,9 +117,9 @@ func _play_narrative() -> void:
 	sy += 10
 	_add_stat_line(sy, "Boss 底分", "+%d" % stats["boss_bonus"], Color(0.5, 0.5, 0.5))
 	sy += 26
-	_add_stat_line(sy, "点数加成", "+%d" % stats["points_bonus"], Color(0.5, 0.5, 0.5))
+	_add_stat_line(sy, "金币加成", "+%d" % stats["gold_bonus"], Color(0.5, 0.5, 0.5))
 	sy += 26
-	_add_stat_line(sy, "感染惩罚", "-%d" % stats["infection_penalty"], Color(0.5, 0.5, 0.5))
+	_add_stat_line(sy, "感染惩罚", "-%d" % stats["assimilation_penalty"], Color(0.5, 0.5, 0.5))
 	sy += 26
 	_add_stat_line(sy, "事件加成", "+%d" % stats["event_bonus"], Color(0.5, 0.5, 0.5))
 	sy += 26

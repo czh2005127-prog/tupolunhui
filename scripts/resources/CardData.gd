@@ -59,17 +59,17 @@ static func get_common_pool() -> Array[CardData]:
 
 static func get_rare_pool() -> Array[CardData]:
 	return [
-		make("cyclops_lcd", "独眼龙LCD", "锁定", "每局1次：删1个点数，本局没人能叫", Rarity.RARE, SkillTrigger.ON_BEFORE_BID),
+		make("cyclops_lcd", "独眼龙LCD", "锁定", "每局1次：删1个点数；高等级可公开普通骰", Rarity.RARE, SkillTrigger.ON_BEFORE_BID),
 		make("two_face", "双面人", "反转骰", "每颗骰子正反面通用，⑥=万能", Rarity.RARE, SkillTrigger.PASSIVE),
-		make("chamberlain", "侍从长", "军械库", "开局获得3个随机道具", Rarity.RARE, SkillTrigger.ON_GAME_START),
+		make("chamberlain", "侍从长", "军械库", "开局获得3个只影响自身的随机道具", Rarity.RARE, SkillTrigger.ON_GAME_START),
 	]
 
 static func get_epic_pool() -> Array[CardData]:
 	return [
 		make("recycler", "回收商", "捡骰", "有人开失败时他+1骰子", Rarity.EPIC, SkillTrigger.PASSIVE),
 		make("lucky_one", "幸运儿", "骰神眷顾", "骰子里永远多1个①", Rarity.EPIC, SkillTrigger.PASSIVE),
-		make("referee", "裁判长", "加时", "第3轮强制所有人开", Rarity.EPIC, SkillTrigger.PASSIVE),
-		make("mirror_tech", "镜面技师", "镜像", "骰子完全复制玩家+道具复制", Rarity.EPIC, SkillTrigger.PASSIVE),
+		make("referee", "裁判长", "强制执行", "每局有限次数强制一个对手立即质疑或叫牌", Rarity.EPIC, SkillTrigger.PASSIVE),
+		make("mirror_tech", "镜面技师", "镜像", "复制玩家骰子及玩家的自身战斗道具", Rarity.EPIC, SkillTrigger.PASSIVE),
 		make("table_ghost", "赌桌幽灵", "附身", "淘汰后附身1个对手(+1骰子+幽灵技能)", Rarity.EPIC, SkillTrigger.ON_ELIMINATED),
 	]
 
@@ -78,7 +78,7 @@ static func get_legendary_pool() -> Array[CardData]:
 		make("alliance_oled", "同盟OLED", "全知", "开局随机让1个对手看到你的骰子", Rarity.LEGENDARY, SkillTrigger.ON_GAME_START),
 		make("casino_owner", "赌场主", "暗骰加码", "每人+1颗暗骰(他自己也看不到)", Rarity.LEGENDARY, SkillTrigger.ON_GAME_START),
 		make("prophet", "算法先知", "重算", "每轮可重掷任意颗骰子", Rarity.LEGENDARY, SkillTrigger.ON_BEFORE_BID),
-		make("dealer", "庄家", "开盘", "永远先叫，初始8颗骰子", Rarity.LEGENDARY, SkillTrigger.ON_GAME_START),
+		make("dealer", "庄家", "开盘", "每轮由庄家先叫，庄家开局拥有8颗骰子", Rarity.LEGENDARY, SkillTrigger.ON_GAME_START),
 	]
 
 static func get_genesis_pool() -> Array[CardData]:
@@ -88,9 +88,9 @@ static func get_genesis_pool() -> Array[CardData]:
 
 static func get_unknown_pool() -> Array[CardData]:
 	return [
-		make("unknown_mirror", "???·镜像", "广播", "开局公布全场最多的1个点数", Rarity.UNKNOWN, SkillTrigger.ON_GAME_START),
+		make("unknown_mirror", "???·镜像", "广播", "每轮公布全场最多的1个点数", Rarity.UNKNOWN, SkillTrigger.ON_GAME_START),
 		make("unknown_chaos", "???·混沌", "乱码", "叫牌显示随机篡改", Rarity.UNKNOWN, SkillTrigger.PASSIVE),
-		make("unknown_abyss", "???·深渊", "吞噬", "每局谁受伤就吞其1颗骰子", Rarity.UNKNOWN, SkillTrigger.ON_ROUND_END),
+		make("unknown_abyss", "???·深渊", "吞噬", "整场对局结束时吞随机一个对手1颗骰子", Rarity.UNKNOWN, SkillTrigger.PASSIVE),
 	]
 
 static func get_pool_by_rarity(rarity: Rarity) -> Array[CardData]:

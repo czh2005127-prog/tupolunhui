@@ -22,11 +22,11 @@ func _ready() -> void:
 		current_stage_index = GameState.current_stage
 		GameState._debug_jump_boss = false
 		_skip_to_boss = true
-	elif GameState.current_stage > 0:
-		current_stage_index = GameState.current_stage
 	elif GameState.has_saved_game() and (GameState.current_stage > 0 or GameState.current_node_index > 0):
 		current_stage_index = GameState.current_stage
 		current_node_index = GameState.current_node_index
+	elif GameState.current_stage > 0:
+		current_stage_index = GameState.current_stage
 
 	# Tutorial now on main menu button, not auto-triggered
 	_on_enter()
@@ -48,15 +48,21 @@ func _on_enter() -> void:
 	GameState.current_stage = current_stage_index
 	EventBus.stage_changed.emit(current_stage_index, stages[current_stage_index].stage_name)
 	_generate_nodes()
+	current_node_index = clampi(current_node_index, 0, nodes_this_stage.size() - 1)
 	if _skip_to_boss:
 		_skip_to_boss = false
 		current_node_index = nodes_this_stage.size() - 1
+	GameState.current_node_index = current_node_index
 	_run_node(nodes_this_stage[current_node_index])
 
 func _generate_nodes() -> void:
 	nodes_this_stage.clear()
-	nodes_this_stage.append_array([NodeType.DICE, NodeType.DICE, NodeType.EVENT])
-	nodes_this_stage.append(NodeType.BOSS)
+	match current_stage_index:
+		0: nodes_this_stage.append_array([NodeType.DICE, NodeType.DICE, NodeType.BOSS])
+		1: nodes_this_stage.append_array([NodeType.DICE, NodeType.DICE, NodeType.EVENT, NodeType.BOSS])
+		2: nodes_this_stage.append_array([NodeType.DICE, NodeType.DICE, NodeType.DICE, NodeType.BOSS])
+		3: nodes_this_stage.append_array([NodeType.DICE, NodeType.DICE, NodeType.DICE, NodeType.DICE, NodeType.BOSS])
+		_: nodes_this_stage.append(NodeType.BOSS)
 
 func _run_node(node_type: int) -> void:
 	for child: Node in get_children():
@@ -118,9 +124,24 @@ func _launch_event() -> void:
 		inst.set_parent_flow(self)
 
 func _on_node_completed(_type: String) -> void:
+	var was_elite: bool = false
+	for card in _drawn_cards:
+		if card and card.rarity == CardData.Rarity.UNKNOWN:
+			was_elite = true
+			break
 	# If this was a regular battle, launch shop automatically
 	if not _is_boss_node and nodes_this_stage[current_node_index] == NodeType.DICE:
 		GameState.add_gold(_battle_gold)
+		if was_elite:
+			if not GameState.add_consumable_item(CardPoolRef.get_elite_item()):
+				await EventBus.discard_resolved
+			GameState.add_rust_points(2)
+			GameState.save_progress()
+			current_node_index += 1
+			GameState.current_node_index = current_node_index
+			await _show_corridor()
+			_run_node(nodes_this_stage[current_node_index])
+			return
 		_launch_shop()
 		return
 
@@ -128,8 +149,15 @@ func _on_node_completed(_type: String) -> void:
 	if _is_boss_node:
 		GameState.add_gold(_battle_gold)
 		var leg_item: String = CardPoolRef.get_legendary_item()
-		GameState.add_consumable_item(leg_item)
+		if not GameState.add_consumable_item(leg_item):
+			await EventBus.discard_resolved
 		EventBus.hint_show.emit("获得传说道具: " + GameState.get_item_info(leg_item).item_name, 3.0, Color(0.98, 0.78, 0.29))
+		if was_elite:
+			var elite_item: String = CardPoolRef.get_elite_item()
+			if not GameState.add_consumable_item(elite_item):
+				await EventBus.discard_resolved
+			GameState.add_rust_points(2)
+			EventBus.hint_show.emit("未知精英追加奖励: 稀有判定道具 + 2锈蚀点", 3.0, Color(0.75, 0.45, 0.85))
 		# Record boss defeat
 		GameState.bosses_defeated.append(str(current_stage_index))
 		# Award rust points
@@ -148,10 +176,6 @@ func _on_node_completed(_type: String) -> void:
 	if current_node_index >= nodes_this_stage.size():
 		current_stage_index += 1
 		current_node_index = 0
-		# Award rust points for stage clear
-		if current_stage_index >= 2 and current_stage_index < 4:
-			GameState.add_rust_points(current_stage_index - 1)
-			GameState.save_progress()
 		await _show_corridor()
 		_on_enter()
 	else:
@@ -250,7 +274,7 @@ func _show_corridor() -> void:
 		if e is InputEventMouseButton and e.pressed: skipped[0] = true)
 
 	var t: float = 0.0
-	while t < 2.5 and not skipped[0]:
+	while t < 1.5 and not skipped[0]:
 		t += get_process_delta_time()
 		await get_tree().process_frame
 		if not is_instance_valid(bg): return
@@ -260,13 +284,22 @@ func _victory() -> void:
 	for child: Node in get_children():
 		if child is Control and child != self: child.queue_free()
 	await get_tree().process_frame
-	GameState.add_rust_points(5)  # 通关奖励
 	GameState._pending_xp += GameState.XP_FULL_CLEAR
 	GameState.commit_pending_xp()
 	GameState.has_cleared_game = true
 	GameState.save_progress()
+	EventBus.run_ended.emit(true)
 	var v: Control = load("res://scripts/ui/VictoryUI.gd").new()
 	add_child(v)
+
+func handle_event_death() -> void:
+	GameState.final_stage_reached = current_stage_index
+	GameState.final_node_reached = current_node_index
+	GameState.commit_pending_xp()
+	GameState.delete_run_save()
+	GameState.save_progress()
+	EventBus.run_ended.emit(false)
+	get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn")
 
 func emit_node_done() -> void:
 	EventBus.node_completed.emit("")

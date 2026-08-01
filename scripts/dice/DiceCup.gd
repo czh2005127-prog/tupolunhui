@@ -15,32 +15,18 @@ func _create_dice() -> void:
 	for i: int in range(dice_count):
 		dice.append(preload("res://scripts/dice/DiceDie.gd").new())
 
-## Check if values form a straight (consecutive 1-5 or 2-6, ignoring order)
-func _is_straight() -> bool:
-	var vals: Array = []
-	for die in dice:
-		if not die.is_hidden:
-			vals.append(die.value)
-	if vals.size() < 2: return false
-	vals.sort()
-	for i in range(vals.size() - 1):
-		if vals[i + 1] - vals[i] != 1:
-			return false
-	# Reject if it's a straight — must not be consecutive
-	return true
-
 func roll_all() -> void:
 	for die in dice:
 		if not die.locked:
 			die.roll()
-	# Re-roll if results are a straight (e.g., 1-2-3-4-5)
-	# Cap at 20 attempts to avoid infinite loop
-	var attempts: int = 0
-	while _is_straight() and attempts < 20:
-		for die in dice:
-			if not die.locked:
-				die.roll()
-		attempts += 1
+
+## Roll for a new round. A frozen die skips exactly this roll, then unlocks.
+func roll_new_round() -> void:
+	for die in dice:
+		if die.locked:
+			die.locked = false
+		else:
+			die.roll()
 
 ## Make all dice visible (cancel any hidden/dark dice)
 func set_all_visible() -> void:
@@ -53,13 +39,16 @@ func roll_indices(indices: Array[int]) -> void:
 	for idx in indices:
 		if idx >= 0 and idx < dice.size():
 			dice[idx].roll()
-	# Reroll whole cup if rerolled subset somehow formed a straight
-	var attempts: int = 0
-	while _is_straight() and attempts < 20:
-		for idx in indices:
-			if idx >= 0 and idx < dice.size():
-				dice[idx].roll()
-		attempts += 1
+
+## Hide up to [count] distinct dice.
+func hide_random_dice(count: int) -> void:
+	var indices: Array[int] = []
+	for i in range(dice.size()):
+		if not dice[i].is_hidden:
+			indices.append(i)
+	indices.shuffle()
+	for i in range(mini(count, indices.size())):
+		dice[indices[i]].is_hidden = true
 
 ## Flip a die at index (1↔6, 2↔5, 3↔4)
 func flip_at(idx: int) -> void:

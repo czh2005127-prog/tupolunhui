@@ -24,10 +24,7 @@ var enemies_defeated_this_run: int = 0
 var final_stage_reached: int = 0
 var final_node_reached: int = 0
 
-# Difficulty - persistent
 var has_cleared_game: bool = false
-# Per-run toggle
-var hardcore_mode: bool = false
 
 # Debug: quick-jump from main menu to boss fight
 var _debug_jump_boss: bool = false
@@ -39,10 +36,15 @@ var shop_items: Array = []
 var event_notification: String = ""
 var _temp_bonus_dice: int = 0
 var _seen_events: Array[String] = []
+var next_battle_fixed_six: bool = false
+var next_boss_dice_penalty: int = 0
+var next_boss_start_assimilated: bool = false
 
 # ----- Rust Contract system -----
 # Card upgrade levels: { card_id: level (0-3) }
 var card_levels: Dictionary = {}
+# Highest permanently purchased level. Active levels can be freely toggled below it.
+var purchased_card_levels: Dictionary = {}
 # Accumulated rust points
 var rust_points: int = 0
 # Rust points earned this run
@@ -62,6 +64,12 @@ var _new_levels: Array[int] = []
 const XP_PER_ENEMY: int = 10
 const XP_PER_BOSS: int = 25
 const XP_FULL_CLEAR: int = 100
+const STARTER_ITEMS: Array[String] = [
+	"reroll_stone", "full_reroll", "flip_die",
+	"see_dark", "emergency_restart", "silent_turn",
+	"purge_chip", "gambler_hunch", "payout",
+	"freeze_die", "clone_die", "heat_vision", "fate_die",
+]
 
 func xp_for_next_level() -> int:
 	return 50 * player_level
@@ -103,9 +111,13 @@ func _apply_unlock(level: int) -> void:
 			var item_id: String = id.substr(5)
 			if not (item_id in unlocked_items):
 				unlocked_items.append(item_id)
-		else:
-			if not (id in unlocked_cards):
-				unlocked_cards.append(id)
+		elif not (id in unlocked_cards):
+			unlocked_cards.append(id)
+
+func _ensure_starter_items() -> void:
+	for item_id in STARTER_ITEMS:
+		if item_id not in unlocked_items:
+			unlocked_items.append(item_id)
 
 func _get_unlocks_for_level(level: int) -> Array[String]:
 	match level:
@@ -123,6 +135,9 @@ func _get_unlocks_for_level(level: int) -> Array[String]:
 		7: return ["item:extra_die"]
 		8: return ["item:rig_dice"]
 		9: return ["item:sabotage"]
+		10: return ["item:pair_fix"]
+		11: return ["item:borrow_die"]
+		12: return ["item:royal_pardon"]
 	return []
 
 ## Commit all XP earned this run (called on death or full clear)
@@ -137,10 +152,11 @@ func get_gold_bonus() -> int:
 # ----- Tutorial -----
 var tutorial_enabled: bool = true
 
-const MAX_CONSUMABLE: int = 6
+const MAX_CONSUMABLE: int = 3
 
 func get_bonus_dice_count() -> int:
 	var b: int = _temp_bonus_dice
+	_temp_bonus_dice = 0
 	return b
 
 func set_bonus_dice(count: int) -> void:
@@ -158,7 +174,13 @@ func spend_gold(amount: int) -> bool:
 	return false
 
 func assimilate() -> void:
-	assimilation_count += 1
+	if assimilation_count >= MAX_ASSIMILATION:
+		return
+	if assimilation_count == MAX_ASSIMILATION - 1 and "royal_pardon" in consumable_items:
+		use_consumable("royal_pardon")
+		EventBus.hint_show.emit("国王赦免生效：免除致死同化", 3.0, Color(0.98, 0.78, 0.29))
+		return
+	assimilation_count = mini(assimilation_count + 1, MAX_ASSIMILATION)
 	total_assimilations += 1
 	if assimilation_count == 1:
 		EventBus.half_assimilated.emit()
@@ -223,43 +245,45 @@ func upgrade_card(card_id: String) -> bool:
 	if card == null:
 		return false
 	var max_level: int = get_max_level_for_card(card_id)
-	var current: int = get_card_level(card_id)
-	if current >= max_level:
+	var active: int = get_card_level(card_id)
+	var purchased: int = int(purchased_card_levels.get(card_id, active))
+	if active < purchased:
+		card_levels[card_id] = active + 1
+		save_progress()
+		return true
+	if purchased >= max_level:
 		return false
-	var cost: int = get_upgrade_cost_for_rarity(card.rarity) + current
+	var cost: int = get_upgrade_cost_for_rarity(card.rarity)
 	if rust_points < cost:
 		return false
 	rust_points -= cost
-	card_levels[card_id] = current + 1
+	purchased += 1
+	purchased_card_levels[card_id] = purchased
+	card_levels[card_id] = purchased
 	save_progress()
 	return true
 
 func downgrade_card(card_id: String) -> bool:
-	var card := CardData.get_card_by_id(card_id)
-	if card == null:
-		return false
 	var current: int = get_card_level(card_id)
 	if current <= 0:
 		return false
-	var refund: int = get_upgrade_cost_for_rarity(card.rarity) + (current - 1)
-	rust_points += refund
 	card_levels[card_id] = current - 1
 	save_progress()
 	return true
 
 func clear_all_levels() -> int:
-	var refund: int = 0
 	for cid in card_levels:
-		var lv: int = card_levels[cid]
-		if lv <= 0: continue
-		var card := CardData.get_card_by_id(cid)
-		if card == null: continue
-		for i in range(lv):
-			refund += get_upgrade_cost_for_rarity(card.rarity) + i
-	card_levels.clear()
-	rust_points += refund
+		card_levels[cid] = 0
 	save_progress()
-	return refund
+	return 0
+
+func get_purchased_card_level(card_id: String) -> int:
+	return int(purchased_card_levels.get(card_id, get_card_level(card_id)))
+
+func get_next_card_level_cost(card_id: String) -> int:
+	var card := CardData.get_card_by_id(card_id)
+	if card == null: return 0
+	return 0 if get_card_level(card_id) < get_purchased_card_level(card_id) else get_upgrade_cost_for_rarity(card.rarity)
 
 func get_max_level_for_card(card_id: String) -> int:
 	return _get_max_level(card_id)
@@ -296,7 +320,7 @@ func get_run_rust_points() -> int:
 
 ## ---- Setup ----
 func setup_new_run() -> void:
-	gold = 999
+	gold = 0
 	assimilation_count = 0
 	current_stage = 0
 	current_node_index = 0
@@ -304,12 +328,6 @@ func setup_new_run() -> void:
 	_run_xp = 0
 	_pending_xp = 0
 	_new_levels.clear()
-	# Lv.18+ starts with 1 random common item
-	if player_level >= 18:
-		var gifts: Array[String] = ["reroll_stone", "flip_die", "full_reroll", "see_dark", "silent_turn", "purge_chip", "gambler_hunch", "payout"]
-		consumable_items.append(gifts[randi() % gifts.size()])
-
-## 骰子之神快速测试 (F6键已删除)
 	stages_cleared.clear()
 	bosses_defeated.clear()
 	enemies_defeated_this_run = 0
@@ -327,6 +345,10 @@ func setup_new_run() -> void:
 	_run_xp = 0
 	_pending_xp = 0
 	_new_levels.clear()
+	_temp_bonus_dice = 0
+	next_battle_fixed_six = false
+	next_boss_dice_penalty = 0
+	next_boss_start_assimilated = false
 	_clear_save()
 
 func calculate_score() -> Dictionary:
@@ -341,7 +363,8 @@ func calculate_score() -> Dictionary:
 	elif total >= 220: tier = "B"
 	return {"score": total, "tier": tier, "boss_bonus": boss_bonus, "gold_bonus": gold_bonus, "assimilation_penalty": assimilation_penalty, "event_bonus": event_bonus}
 
-func save_run(_dice_game_virus: int = 0) -> void:
+func save_run(_dice_game_virus: int = 0, temporarily_disabled_items: Array = [], restart_modifiers: Dictionary = {}) -> void:
+	assimilation_count = clampi(maxi(assimilation_count, _dice_game_virus), 0, MAX_ASSIMILATION)
 	var f := FileAccess.open("user://save_game.dat", FileAccess.WRITE)
 	if not f:
 		return
@@ -352,10 +375,17 @@ func save_run(_dice_game_virus: int = 0) -> void:
 	f.store_32(stages_cleared.size())
 	for s in stages_cleared:
 		f.store_32(s)
-	f.store_32(consumable_items.size())
-	for item in consumable_items:
+	var saved_items: Array[String] = consumable_items.duplicate()
+	for item_id in temporarily_disabled_items:
+		saved_items.append(str(item_id))
+	f.store_32(saved_items.size())
+	for item in saved_items:
 		f.store_pascal_string(item)
 	f.store_32(_dice_game_virus)
+	f.store_32(maxi(_temp_bonus_dice, int(restart_modifiers.get("bonus_dice", 0))))
+	f.store_32(1 if next_battle_fixed_six or bool(restart_modifiers.get("fixed_six", false)) else 0)
+	f.store_32(maxi(next_boss_dice_penalty, int(restart_modifiers.get("boss_dice_penalty", 0))))
+	f.store_32(1 if next_boss_start_assimilated else 0)
 	f.close()
 
 func has_saved_game() -> bool:
@@ -376,12 +406,23 @@ func load_run() -> bool:
 	consumable_items.clear()
 	for _i in range(ic):
 		consumable_items.append(f.get_pascal_string())
+	# Older saves may not contain the trailing battle-virus field.
+	if f.get_position() < f.get_length():
+		var saved_virus: int = f.get_32()
+		assimilation_count = clampi(maxi(assimilation_count, saved_virus), 0, MAX_ASSIMILATION)
+	if f.get_position() < f.get_length(): _temp_bonus_dice = f.get_32()
+	if f.get_position() < f.get_length(): next_battle_fixed_six = f.get_32() == 1
+	if f.get_position() < f.get_length(): next_boss_dice_penalty = f.get_32()
+	if f.get_position() < f.get_length(): next_boss_start_assimilated = f.get_32() == 1
 	f.close()
 	return true
 
-func _clear_save() -> void:
+func delete_run_save() -> void:
 	if FileAccess.file_exists("user://save_game.dat"):
 		DirAccess.remove_absolute("user://save_game.dat")
+
+func _clear_save() -> void:
+	delete_run_save()
 	refresh_shop(6)
 	EventBus.run_started.emit()
 
@@ -407,20 +448,17 @@ func save_progress() -> void:
 	f.store_32(1 if tutorial_enabled else 0)
 	f.store_32(player_xp)
 	f.store_32(player_level)
+	f.store_32(purchased_card_levels.size())
+	for cid in purchased_card_levels:
+		f.store_pascal_string(cid)
+		f.store_32(purchased_card_levels[cid])
 	f.close()
 
 func load_progress() -> void:
 	if not FileAccess.file_exists("user://progress.dat"):
 		# No save file — still apply Lv.1 starter unlocks so the card pool isn't empty.
 		_apply_unlock(1)
-		if unlocked_items.is_empty():
-			unlocked_items = [
-				"reroll_stone", "full_reroll", "flip_die",
-				"see_dark", "emergency_restart", "silent_turn",
-				"purge_chip", "gambler_hunch", "payout",
-				"freeze_die", "clone_die", "heat_vision",
-				"fate_die",
-			]
+		_ensure_starter_items()
 		return
 	var f := FileAccess.open("user://progress.dat", FileAccess.READ)
 	if not f: return
@@ -443,17 +481,18 @@ func load_progress() -> void:
 	if f.get_position() < f.get_length():
 		player_xp = f.get_32()
 		player_level = max(1, f.get_32())
+	purchased_card_levels.clear()
+	if f.get_position() < f.get_length():
+		var purchased_count: int = f.get_32()
+		for _i in range(purchased_count):
+			purchased_card_levels[f.get_pascal_string()] = f.get_32()
+	else:
+		purchased_card_levels = card_levels.duplicate()
 	f.close()
-	# Ensure starter cards + items are always unlocked (idempotent — handles save migration)
-	_apply_unlock(1)
-	if unlocked_items.is_empty():
-		unlocked_items = [
-			"reroll_stone", "full_reroll", "flip_die",
-			"see_dark", "emergency_restart", "silent_turn",
-			"purge_chip", "gambler_hunch", "payout",
-			"freeze_die", "clone_die", "heat_vision",
-			"fate_die",
-		]
+	# Rebuild all level-based unlocks so older saves with an empty card list migrate safely.
+	for level in range(1, player_level + 1):
+		_apply_unlock(level)
+	_ensure_starter_items()
 
 ## Stage gold payout per layer
 static func get_stage_gold(stage: int) -> int:
@@ -464,4 +503,4 @@ static func get_stage_gold(stage: int) -> int:
 		2: base = 65
 		3: base = 90
 		_: base = 30
-	return base + GameState.get_gold_bonus()
+	return base

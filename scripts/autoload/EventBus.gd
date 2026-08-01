@@ -31,6 +31,7 @@ signal gold_changed(new_amount: int)
 signal item_acquired(item_id: String)
 signal item_used(item_id: String)
 signal discard_prompt(new_item_id: String)
+signal discard_resolved
 signal shop_entered
 signal shop_exited
 signal hint_show(message: String, duration: float, color: Color)

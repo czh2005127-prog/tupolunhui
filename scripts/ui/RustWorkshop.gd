@@ -123,9 +123,7 @@ func _draw_grid() -> void:
 		idx += 1
 
 func _is_card_unlocked(card: CardData) -> bool:
-	if card.rarity >= CardData.Rarity.GENESIS:
-		return true
-	return card.card_id in GameState.unlocked_cards
+	return true
 
 func _draw_card(rx: float, ry: float, card: CardData, idx: int) -> void:
 	var cid: String = card.card_id
@@ -311,7 +309,7 @@ func _show_detail(card: CardData) -> void:
 	_show_level_path(panel, card, px)
 
 	var mx := GameState.get_max_level_for_card(card.card_id)
-	var cost: int = GameState.get_upgrade_cost_for_rarity(card.rarity) + lv
+	var cost: int = GameState.get_next_card_level_cost(card.card_id)
 	var pts := GameState.rust_points
 	var can_up := lv < mx and pts >= cost
 	var can_down := lv > 0
@@ -430,7 +428,7 @@ func _get_level_descs(card_id: String) -> Array:
 		"chamberlain": return ["开局获得5个道具", "5道具+保底1稀有", "6道具+保底2稀有"]
 		"recycler": return ["有人开失败+2骰", "+2骰+吸对手1骰", "+2+吸+每局结束+1骰"]
 		"lucky_one": return ["骰子永远多2个①", "骰子永远多3个①", "多3个①+他的①别人当不了万能"]
-		"referee": return ["第2轮强制所有人开", "第2轮开+公布危险点数", "第1轮结束强制开+危险点数"]
+		"referee": return ["每局强制对手行动1次", "每局强制对手行动2次", "每局强制对手行动3次"]
 		"table_ghost": return ["淘汰后附身2个对手", "附身2人+被附身1轮免疫质疑", ""]
 		"alliance_oled": return ["知道n-1人的全部骰子", "", ""]
 		"casino_owner": return ["每人+2颗暗骰", "+2暗骰+自己能看", "每人+3暗骰+自己全看到"]

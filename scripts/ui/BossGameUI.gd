@@ -29,15 +29,3 @@ func setup_with_flow(stage: Resource, flow: Node, param3: Variant = null) -> voi
 		# Pass card data as Array (3 cards for boss), DiceGameHUD detects count >= 3 → is_boss
 		var cards: Array = param3 if param3 is Array else []
 		_dice_inst.setup_with_flow(stage, flow, cards)
-
-		var inner_game: Node = _dice_inst.get_node_or_null("DiceGame")
-		if inner_game and inner_game.has_signal("game_over"):
-			inner_game.game_over.connect(_on_boss_game_over)
-
-func _on_boss_game_over(winner: String) -> void:
-	# 只在胜利时自动推进；死机交给 DiceGameHUD._on_game_over 处理
-	if winner != "player":
-		return
-	await get_tree().create_timer(1.5).timeout
-	if _flow and _flow.has_method("emit_node_done"):
-		_flow.emit_node_done()

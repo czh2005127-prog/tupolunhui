@@ -399,13 +399,13 @@ func _show_discard_swapper(new_id: String, item: Resource) -> void:
 	cancel.add_theme_stylebox_override("normal", cs)
 	cancel.add_theme_font_size_override("font_size", 11)
 	cancel.pressed.connect(func():
-		GameState.gold += item.price
 		layer.queue_free()
 		_refresh_gold())
 	panel.add_child(cancel)
 
 func _on_refresh() -> void:
-	var cost: int = 5 + _refresh_count * 5
+	var costs: Array[int] = [3, 6, 10, 15, 20]
+	var cost: int = costs[_refresh_count] if _refresh_count < costs.size() else 25 + (_refresh_count - costs.size()) * 5
 	if GameState.gold < cost:
 		_show_warning("刷新需要 %d 点!" % cost)
 		return

@@ -82,9 +82,10 @@ var _item_locked: bool = false  # re-entrancy guard for item usage
 
 # Peek mode (透屏: two-phase — select opponent then position)
 var _peek_phase: String = ""  # "opponent" | "position" | ""
-var _peek_opponent: String = ""  # "ai1" or "ai2"
+var _peek_opponent: String = ""  # "ai1", "ai2", or "ai3"
 var _peek_btn1: ColorRect
 var _peek_btn2: ColorRect
+var _peek_btn3: ColorRect
 
 var _bid_count: int = 1
 var _bid_value: int = 2
@@ -395,61 +396,6 @@ func _build_all_ui() -> void:
 		_die_boxes.append(die_box)
 		if i >= 5: die_box.visible = false
 
-	# === UI SKIN OVERLAYS (custom assets) ===
-	var _dice_zone_tex: Resource = load("res://assets/ui/dice_zone.png")
-	if _dice_zone_tex:
-		var dz := TextureRect.new()
-		dz.texture = _dice_zone_tex
-		dz.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		dz.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		dz.position = Vector2(735, 707)
-		dz.size = Vector2(450, 409)
-		dz.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		dz.z_index = 10
-		add_child(dz)
-	var _hint_tex: Resource = load("res://assets/ui/hint_bar.png")
-	if _hint_tex:
-		var ht := TextureRect.new()
-		ht.texture = _hint_tex
-		ht.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		ht.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		ht.position = Vector2(145, 170)
-		ht.size = Vector2(364, 235)  # hint bar
-		ht.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		ht.z_index = 10
-		add_child(ht)
-	var _opp_card_tex: Resource = load("res://assets/ui/opponent_card.png")
-	if _opp_card_tex:
-		var oc := TextureRect.new()
-		oc.texture = _opp_card_tex
-		oc.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		oc.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		oc.position = Vector2(509, 188)
-		oc.size = Vector2(646, 199)
-		oc.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		oc.z_index = 10
-		add_child(oc)
-	var _minus_tex: Resource = load("res://assets/ui/btn_minus.png")
-	if _minus_tex:
-		for mp in [Vector2(567, 388), Vector2(567, 439)]:
-			var mb := TextureButton.new()
-			mb.texture_normal = _minus_tex
-			mb.position = mp
-			mb.size = Vector2(59, 46)
-			mb.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-			mb.z_index = 10
-			add_child(mb)
-	var _plus_tex: Resource = load("res://assets/ui/btn_plus.png")
-	if _plus_tex:
-		for pp in [Vector2(693, 388), Vector2(693, 439)]:
-			var pb := TextureButton.new()
-			pb.texture_normal = _plus_tex
-			pb.position = pp
-			pb.size = Vector2(59, 46)
-			pb.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-			pb.z_index = 10
-			add_child(pb)
-
 	# === INFO STRIP (12h) ===
 	var info_y: int = dice_y + dice_h + 6
 	var info_h: int = 14
@@ -481,6 +427,7 @@ func _on_die_click(die_idx: int, event: InputEvent) -> void:
 	elif _selection_mode_type == "flip_die":
 		game_ctrl.flip_die_at(die_idx)
 		GameState.use_consumable(_active_item_id)
+		game_ctrl.mirror_item("flip_die", {"index": die_idx})
 		_exit_selection_mode()
 		_refresh_item_display()
 		_log_event("翻骰: 翻转骰子")
@@ -489,6 +436,7 @@ func _on_die_click(die_idx: int, event: InputEvent) -> void:
 		if die_idx in paired:
 			game_ctrl.clone_player_die(die_idx)
 			GameState.use_consumable(_active_item_id)
+			game_ctrl.mirror_item("clone_die", {"index": die_idx})
 			_exit_selection_mode()
 			_refresh_item_display()
 			_log_event("克隆: 复制对子")
@@ -496,9 +444,17 @@ func _on_die_click(die_idx: int, event: InputEvent) -> void:
 		if game_ctrl:
 			game_ctrl.lock_player_die(die_idx)
 		GameState.use_consumable(_active_item_id)
+		game_ctrl.mirror_item("freeze_die", {"index": die_idx})
 		_exit_selection_mode()
 		_refresh_item_display()
 		_log_event("定格: 锁定骰子直至下轮")
+	elif _selection_mode_type == "fate_die":
+		game_ctrl.activate_fate_die(die_idx)
+		GameState.use_consumable(_active_item_id)
+		game_ctrl.mirror_item("fate_die", {"index": die_idx})
+		_exit_selection_mode()
+		_refresh_item_display()
+		_log_event("命运骰: 该位置连续3轮固定")
 	elif _selection_mode_type == "reroll_stone" or _selection_mode_type == "split_die" or _selection_mode_type == "rig_dice":
 		if die_idx < _selected_dice.size():
 			if _selection_mode_type == "split_die":
@@ -507,6 +463,9 @@ func _on_die_click(die_idx: int, event: InputEvent) -> void:
 				_selected_dice[die_idx] = true
 				_on_select_confirm()
 				return
+			if _selection_mode_type == "rig_dice" and not _selected_dice[die_idx]:
+				var selected_count: int = _selected_dice.count(true)
+				if selected_count >= 2: return
 			_selected_dice[die_idx] = not _selected_dice[die_idx]
 			_update_die_highlight(die_idx)
 
@@ -1171,19 +1130,10 @@ func _on_game_over(winner: String) -> void:
 			status_label.text = "你赢了!"
 		# 追踪：击败敌人计数
 		GameState.enemies_defeated_this_run += 1
-		# Boss defeated tracking
-		if _is_boss_match:
-			var boss_names: Array[String] = ["瘸腿老杰克", "独眼龙老板娘", "西装暴徒三人组", "骰子之神HOLO"]
-			var s: int = clamp(GameState.current_stage, 0, 3)
-			if s < boss_names.size():
-				GameState.bosses_defeated.append(boss_names[s])
-		# 锈蚀点数: 普通+1, Boss+2
-		var pts: int = 2 if _is_boss_match else 1
-		GameState.add_rust_points(pts)
 		GameState._pending_xp += (GameState.XP_PER_BOSS if _is_boss_match else GameState.XP_PER_ENEMY)
-		GameState.save_progress()  # 立即持久化
 		_show_actions(false)
-		_show_victory_screen(_has_unknown)
+		# Rewards are resolved centrally by GameFlow.
+		_show_victory_screen(false)
 	else:
 		if status_label:
 			status_label.text = "你死机了... 蓝屏"
@@ -1191,6 +1141,7 @@ func _on_game_over(winner: String) -> void:
 		GameState.final_stage_reached = GameState.current_stage
 		GameState.final_node_reached = GameState.current_node_index
 		GameState.commit_pending_xp()
+		GameState.delete_run_save()
 		GameState.save_progress()
 		_show_actions(false)
 		_show_death_screen()
@@ -1337,8 +1288,9 @@ func _show_victory_screen(has_elite: bool = false) -> void:
 	xp_lbl.add_theme_color_override("font_color", Color(0.4, 0.5, 0.6))
 	overlay.add_child(xp_lbl)
 
-	var gold_amount: int = (GameState.current_stage + 1) * 25
-	var claimed: Dictionary = {"item": false, "gold": false}
+	var gold_amount: int = 0
+	# Gold is awarded once by GameFlow when the node completes.
+	var claimed: Dictionary = {"item": false, "gold": true}
 
 	var cbs: Dictionary = {"item": Callable(), "gold": Callable(), "advance": Callable()}
 	cbs["advance"] = func():
@@ -1349,10 +1301,7 @@ func _show_victory_screen(has_elite: bool = false) -> void:
 		claimed["item"] = true
 		_show_item_pick_inline(overlay, gold_amount, claimed, cbs["gold"], cbs["item"], cbs["advance"])
 	cbs["gold"] = func():
-		if claimed["gold"]: return
-		claimed["gold"] = true
-		GameState.add_gold(gold_amount)
-		_build_victory_buttons(overlay, claimed, cbs["item"], cbs["gold"], cbs["advance"], has_elite)
+		return
 
 	_build_victory_buttons(overlay, claimed, cbs["item"], cbs["gold"], cbs["advance"], has_elite)
 
@@ -1427,13 +1376,6 @@ func _show_item_pick_inline(parent_overlay: Control, gold_amount: int, claimed: 
 				_build_victory_buttons(parent_overlay, claimed, claim_item, claim_gold, do_advance, true)
 		)
 
-	_make_btn_at(parent_overlay, Vector2(340, 560), Vector2(600, 56), "领取金币 +%d" % gold_amount, Color(0.98, 0.78, 0.29), true,
-		func():
-			GameState.add_gold(gold_amount)
-			_clear_pick_children(parent_overlay)
-			_build_victory_buttons(parent_overlay, claimed, claim_item, claim_gold, do_advance, true)
-	).name = "VBtnGold"
-
 func _clear_pick_children(overlay: Control) -> void:
 	for c in overlay.get_children():
 		var n: String = c.name
@@ -1495,7 +1437,9 @@ func _build_pause_menu() -> void:
 	# 3. 暂退游戏
 	_add_pause_btn(btn_y, "暂退游戏", Color(0.8, 0.65, 0.25), func():
 		var virus: int = game_ctrl.player_virus if game_ctrl else 0
-		GameState.save_run(virus)
+		var disabled_items: Array = game_ctrl.get_temporarily_disabled_player_items() if game_ctrl and game_ctrl.has_method("get_temporarily_disabled_player_items") else []
+		var restart_modifiers: Dictionary = game_ctrl.get_battle_restart_modifiers() if game_ctrl and game_ctrl.has_method("get_battle_restart_modifiers") else {}
+		GameState.save_run(virus, disabled_items, restart_modifiers)
 		get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn"))
 	btn_y += btn_gap
 
@@ -1590,19 +1534,7 @@ func _use_consumable_item(item_id: String) -> void:
 			_enter_selection_mode(item_id)
 			return  # Don't consume yet — wait for confirm
 		"fate_die":
-			_log_event("使用命运骰...")
-			if randf() < 0.5 and game_ctrl:
-				for i in range(game_ctrl.player_cup.dice.size()):
-					game_ctrl.set_player_die_value(i, 1)
-				_update_dice_display()
-				_log_event("命运骰生效: 所有骰子变①!")
-				if status_label: status_label.text = "命运骰: 所有骰子变①!"
-			else:
-				_log_event("命运骰失败: 什么也没有")
-				if status_label: status_label.text = "命运骰: 什么也没有"
-			GameState.use_consumable(item_id)
-			_refresh_item_display()
-			_item_locked = false
+			_enter_selection_mode(item_id)
 			return
 		"full_reroll":
 			game_ctrl.reroll_player_dice(false)
@@ -1624,12 +1556,9 @@ func _use_consumable_item(item_id: String) -> void:
 			# Big/Small judge: select opponent, show size labels
 			_enter_peek_mode(item_id)
 			return
-		"heat_vision":
-			# Instantly show all opponents' dice as red/blue blocks in notify area
-			_show_all_opponents_heat_vision()
-			GameState.use_consumable(item_id)
-			_log_event("热感视觉: 已显示对手骰子")
-			_update_dice_display()
+		"heat_vision", "borrow_die", "sabotage":
+			_enter_peek_mode(item_id)
+			return
 		"split_die":
 			_enter_selection_mode(item_id)
 			return
@@ -1646,20 +1575,17 @@ func _use_consumable_item(item_id: String) -> void:
 			_enter_selection_mode(item_id)
 			return
 		"extra_die", "copy_die":
-			# 随机加两颗骰子 (推迟到揭示后)
-			if game_ctrl:
-				game_ctrl.queue_dice("player", 2)
-				_update_dice_display()
+			game_ctrl.player_cup.add_die()
 			GameState.use_consumable(item_id)
-			_log_event("加骰: 获得2颗随机骰子")
-			if status_label: status_label.text = "加骰: 获得2颗随机骰子!"
+			_update_dice_display()
+			_log_event("加骰: 本场对局增加1颗骰子")
+			if status_label: status_label.text = "本场对局增加1颗骰子"
 		"purge_chip":
 			GameState.clear_assimilation()
 			if game_ctrl:
 				game_ctrl.player_virus = 0
-				game_ctrl.player_shield = true
 			GameState.use_consumable(item_id)
-			EventBus.hint_show.emit("净化芯片: 清除感染 + 免疫下一次伤害", 3.0, Color(0.36, 0.79, 0.65))
+			EventBus.hint_show.emit("净化芯片: 清除半同化", 3.0, Color(0.36, 0.79, 0.65))
 			_refresh_virus()
 			_log_event("净化芯片: 病毒已清除")
 			if status_label: status_label.text = "病毒已清除!"
@@ -1678,20 +1604,17 @@ func _use_consumable_item(item_id: String) -> void:
 			# Select 2 dice to set to 1
 			_enter_selection_mode(item_id)
 			return
-		"sabotage":
-			# 所有人增加一颗随机骰子
-			if game_ctrl:
-				game_ctrl.player_cup.add_die()
-				game_ctrl.ai_cup_1.add_die()
-				game_ctrl.ai_cup_2.add_die()
-				if game_ctrl.ai3_virus < game_ctrl.AI_MAX_VIRUS:
-					game_ctrl.ai_cup_3.add_die()
-				_update_dice_display()
+		"pair_fix":
+			if not game_ctrl.apply_pair_fix():
+				if status_label: status_label.text = "已有对子或没有可用骰子"
+				_item_locked = false
+				return
 			GameState.use_consumable(item_id)
-			_log_event("算力超频: 所有人+1骰!")
-			if status_label: status_label.text = "算力超频: 所有人+1骰!"
 			_update_dice_display()
-			if status_label: status_label.text = "敌人两颗骰子变为1!"
+		"royal_pardon":
+			if status_label: status_label.text = "国王赦免会在致死时自动消耗"
+			_item_locked = false
+			return
 		_:
 			GameState.use_consumable(item_id)
 			if status_label:
@@ -1722,6 +1645,7 @@ const ITEM_NAMES: Dictionary = {
 	"see_dark": "透屏", "heat_vision": "热感",
 	"silent_turn": "静默", "fate_die": "命运", "extra_die": "加骰",
 	"purge_chip": "净化", "gambler_hunch": "直觉",
+	"pair_fix": "保底对", "royal_pardon": "赦免", "borrow_die": "借骰",
 	"payout": "清算", "rig_dice": "虚张", "sabotage": "超频",
 	}
 func _refresh_item_display() -> void:
@@ -1788,6 +1712,7 @@ func _enter_selection_mode(item_id: String) -> void:
 			"split_die": "点击一颗 >=4 的骰子裂变",
 			"clone_die": "点击有对子的骰子克隆",
 			"freeze_die": "选一颗骰子，下轮锁定该点数",
+			"fate_die": "选一颗骰子，连续3轮固定为当前点数",
 			"rig_dice": "选两颗骰子改为1点，绿色=已选",
 		}
 		status_label.text = hints.get(item_id, "选择一颗骰子")
@@ -1814,7 +1739,11 @@ func _on_select_confirm() -> void:
 	for i in range(_selected_dice.size()):
 		if _selected_dice[i]:
 			indices.append(i)
+	if _selection_mode_type == "rig_dice" and indices.size() != 2:
+		if status_label: status_label.text = "必须选择两颗骰子"
+		return
 	if indices.size() > 0 and game_ctrl:
+		var mirrored_item: String = _selection_mode_type
 		if _selection_mode_type == "reroll_stone":
 			game_ctrl.reroll_selected_dice(indices)
 		elif _selection_mode_type == "split_die":
@@ -1823,6 +1752,7 @@ func _on_select_confirm() -> void:
 			# Set selected dice to 1
 			for idx in indices:
 				game_ctrl.set_player_die_value(idx, 1)
+		game_ctrl.mirror_item(mirrored_item, {"index": indices[0], "indices": indices})
 	GameState.use_consumable(_active_item_id)
 	_update_dice_display()
 	_exit_selection_mode()
@@ -1872,20 +1802,32 @@ func _enter_peek_mode(item_id: String) -> void:
 	_select_cancel_btn = _make_btn_at(self, Vector2(460, 640), Vector2(160, 44), "取消 (道具退回)", Color(0.5, 0.5, 0.5), true, _on_peek_cancel)
 
 func _show_peek_buttons() -> void:
-	var ai1_name: String = game_ctrl.get_all_ai_names()[0] if game_ctrl else "路人A"
-	var ai2_name: String = game_ctrl.get_all_ai_names()[1] if game_ctrl else "路人B"
+	var names: Array = game_ctrl.get_all_ai_names() if game_ctrl else []
+	var ai1_name: String = names[0] if names.size() > 0 else "路人A"
+	var ai2_name: String = names[1] if names.size() > 1 else "路人B"
+	var ai3_name: String = names[2] if names.size() > 2 else "路人C"
 	if game_ctrl.ai1_virus < game_ctrl.AI_MAX_VIRUS:
 		_peek_btn1 = _make_btn_at(self, Vector2(330, 180), Vector2(160, 50), "看 " + ai1_name, Color(0.36, 0.79, 0.65), true, func(): _on_peek_opponent("ai1"))
 	if game_ctrl.ai2_virus < game_ctrl.AI_MAX_VIRUS:
 		_peek_btn2 = _make_btn_at(self, Vector2(800, 180), Vector2(160, 50), "看 " + ai2_name, Color(0.36, 0.79, 0.65), true, func(): _on_peek_opponent("ai2"))
+	if game_ctrl.ai_controller_3 and game_ctrl.ai3_virus < game_ctrl.AI_MAX_VIRUS:
+		_peek_btn3 = _make_btn_at(self, Vector2(1010, 180), Vector2(160, 50), "看 " + ai3_name, Color(0.36, 0.79, 0.65), true, func(): _on_peek_opponent("ai3"))
 
 func _on_peek_opponent(ai_id: String) -> void:
 	_peek_opponent = ai_id
 	if _peek_btn1: _peek_btn1.queue_free(); _peek_btn1 = null
 	if _peek_btn2: _peek_btn2.queue_free(); _peek_btn2 = null
-	# emergency_restart: show all dice with big/small immediately (no position select)
-	if _selection_mode_type == "emergency_restart":
+	if _peek_btn3: _peek_btn3.queue_free(); _peek_btn3 = null
+	# Size-reading items resolve immediately after choosing a target.
+	if _selection_mode_type == "emergency_restart" or _selection_mode_type == "heat_vision":
 		_on_peek_all_dice(ai_id)
+		return
+	if _selection_mode_type == "sabotage":
+		game_ctrl.sabotage_enemy_dice(ai_id)
+		GameState.use_consumable(_active_item_id)
+		game_ctrl.mirror_item("sabotage")
+		_exit_peek_mode()
+		_update_dice_display()
 		return
 	_peek_phase = "position"
 	if status_label: status_label.text = "选择骰子位置 (1-5)"
@@ -1932,8 +1874,10 @@ func _heat_vision_blocks(cup_vals: Array) -> String:
 
 ## emergency_restart: show opponent dice as colored blocks (red=big, blue=small)
 func _on_peek_all_dice(ai_id: String) -> void:
-	var cup_vals: Array = game_ctrl.get_ai_dice_values(0) if ai_id == "ai1" else game_ctrl.get_ai_dice_values(1)
-	var ai_name: String = game_ctrl.get_all_ai_names()[0] if ai_id == "ai1" else game_ctrl.get_all_ai_names()[1]
+	var ai_idx: int = int(ai_id.trim_prefix("ai")) - 1
+	var cup_vals: Array = game_ctrl.get_ai_dice_values(ai_idx)
+	var names: Array = game_ctrl.get_all_ai_names()
+	var ai_name: String = names[ai_idx] if ai_idx >= 0 and ai_idx < names.size() else ai_id
 	var blocks: Array[String] = []
 	var small_cnt: int = 0; var big_cnt: int = 0
 	for i in range(cup_vals.size()):
@@ -1952,7 +1896,9 @@ func _on_peek_all_dice(ai_id: String) -> void:
 func _on_peek_position(idx: int) -> void:
 	if _peek_phase != "position": return
 	var val: int = game_ctrl.peek_ai_die(_peek_opponent, idx)
-	var ai_name: String = game_ctrl.get_all_ai_names()[0] if _peek_opponent == "ai1" else game_ctrl.get_all_ai_names()[1]
+	var ai_idx: int = int(_peek_opponent.trim_prefix("ai")) - 1
+	var names: Array = game_ctrl.get_all_ai_names()
+	var ai_name: String = names[ai_idx] if ai_idx >= 0 and ai_idx < names.size() else _peek_opponent
 	# Show result in dice result area
 	if _notify_label:
 		_notify_label.text = "透屏:\n%s 第%d颗 = %d\n(此信息仅保留本轮)" % [ai_name, idx + 1, val]
@@ -1962,12 +1908,12 @@ func _on_peek_position(idx: int) -> void:
 ## borrow_die: copy opponent die value to player's die
 func _on_borrow_die(idx: int) -> void:
 	if _peek_phase != "position": return
-	var val: int = game_ctrl.peek_ai_die(_peek_opponent, idx)
-	if val >= 1:
-		var player_idx: int = randi() % game_ctrl.player_cup.dice.size()
-		game_ctrl.set_player_die_value(player_idx, val)
-		_update_dice_display()
+	if not game_ctrl.borrow_visible_die(_peek_opponent, idx):
+		if status_label: status_label.text = "该骰子不可见，请选择可见骰子"
+		return
+	_update_dice_display()
 	GameState.use_consumable(_active_item_id)
+	game_ctrl.mirror_item("borrow_die")
 	_exit_peek_mode()
 
 func _on_peek_cancel() -> void:
@@ -1982,6 +1928,7 @@ func _exit_peek_mode() -> void:
 	_peek_opponent = ""
 	if _peek_btn1: _peek_btn1.queue_free(); _peek_btn1 = null
 	if _peek_btn2: _peek_btn2.queue_free(); _peek_btn2 = null
+	if _peek_btn3: _peek_btn3.queue_free(); _peek_btn3 = null
 	if _select_cancel_btn: _select_cancel_btn.queue_free(); _select_cancel_btn = null
 	_update_dice_display()
 	_refresh_item_display()
@@ -2159,7 +2106,8 @@ func _update_dice_display() -> void:
 		return
 	# Peek position phase: show AI dice positions as "?"
 	if _peek_phase == "position" and _peek_opponent != "":
-		var ai_count: int = game_ctrl.get_ai_dice_values(0).size() if _peek_opponent == "ai1" else game_ctrl.get_ai_dice_values(1).size()
+		var ai_idx: int = int(_peek_opponent.trim_prefix("ai")) - 1
+		var ai_count: int = game_ctrl.get_ai_dice_values(ai_idx).size()
 		for i: int in range(_die_labels.size()):
 			var lbl: Label = _die_labels[i] as Label
 			if not lbl: continue
@@ -2423,13 +2371,16 @@ func _on_discard_prompt(new_item_id: String) -> void:
 		var idx: int = i
 		btn.pressed.connect(func():
 			GameState.force_swap_consumable(new_item_id, idx)
-			wrapper.queue_free())
+			wrapper.queue_free()
+			EventBus.discard_resolved.emit())
 		popup.add_child(btn)
 	var cancel := Button.new()
 	cancel.text = "放弃新道具"; cancel.position = Vector2(360, 360)
 	cancel.size = Vector2(160, 30)
 	cancel.add_theme_font_size_override("font_size", 12)
-	cancel.pressed.connect(func(): wrapper.queue_free())
+	cancel.pressed.connect(func():
+		wrapper.queue_free()
+		EventBus.discard_resolved.emit())
 	popup.add_child(cancel)
 	wrapper.add_child(popup)
 

@@ -11,10 +11,13 @@ enum Category { INTEL, RESOURCE, RISK, NARRATIVE }
 
 var _flow: Node
 var _stage: int = 0
+var _pending_discard: bool = false
 
 func set_parent_flow(f: Node) -> void:
 	_flow = f
 	_stage = GameState.current_stage
+	if not EventBus.discard_prompt.is_connected(_on_discard_prompt):
+		EventBus.discard_prompt.connect(_on_discard_prompt)
 	_build()
 
 func _build() -> void:
@@ -47,38 +50,29 @@ func _build() -> void:
 	GameButton.create(self, Vector2(680, 270), Vector2(400, 48), ev["choice_b"], UITheme.RARITY_COMMON.darkened(0.15), _on_choice_b.bind(ev, result_label))
 
 func _pick_event() -> Dictionary:
-	var weights: Array = [3, 4, 3, 2]
-	if not _has_narrative_this_stage():
-		weights = [0, 0, 0, 1]
-
 	var pool: Array[Dictionary] = _get_pool()
-	# Filter by stage lock
-	var valid: Array[Dictionary] = []
-	for e in pool:
-		var stages: Array = e.get("stages", [0, 1, 2, 3])
-		if _stage in stages:
-			valid.append(e)
-
-	var by_cat: Dictionary = {}
-	for e in valid:
-		var cat: int = e["type"]
-		if not by_cat.has(cat): by_cat[cat] = []
-		by_cat[cat].append(e)
-
-	var cat: int = _weighted_pick(weights)
-	var candidates: Array = by_cat.get(cat, valid)
-
 	var fresh: Array = []
-	for e in candidates:
+	for e in pool:
 		if not (e["id"] in GameState._seen_events):
 			fresh.append(e)
-	if fresh.is_empty(): fresh = candidates
+	if fresh.is_empty(): fresh = pool
 
 	var chosen: Dictionary = fresh[randi() % fresh.size()]
 	_remember(chosen["id"])
 	return chosen
 
 func _get_pool() -> Array[Dictionary]:
+	return [
+		{"id": "scrap_heap", "type": Category.RESOURCE, "title": "废弃零件堆", "desc": "散落的零件中还残留着可用算力。", "choice_a": "翻找 (+15 金币)", "choice_b": "拆芯片 (1 件普通道具)"},
+		{"id": "black_vendor", "type": Category.RESOURCE, "title": "黑市贩子", "desc": "披着斗篷的贩子压低声音兜售来路不明的芯片。", "choice_a": "买可疑道具 (5 金换 1 稀有)", "choice_b": "举报 (+20 金币)"},
+		{"id": "fault_protocol", "type": Category.RISK, "title": "故障协议", "desc": "终端要求你确认一份来源不明的系统备份。", "choice_a": "确认备份 (清除半同化)", "choice_b": "拒绝协议 (下局 6 颗骰子)"},
+		{"id": "runaway_die", "type": Category.RISK, "title": "失控骰子", "desc": "一颗失控的骰子在管道间来回跳动。", "choice_a": "抓住 (下局一颗固定⑥)", "choice_b": "让它跳 (+30 金币)"},
+		{"id": "memory_fragment", "type": Category.NARRATIVE, "title": "记忆残片", "desc": "残片中保存着上一位挑战者最后留下的资源。", "choice_a": "继承道具 (1 件稀有)", "choice_b": "继承金币 (+40)"},
+		{"id": "last_stand", "type": Category.RISK, "title": "破釜沉舟", "desc": "你可以提前破坏 Boss 的骰子，但代价会立刻侵入你的系统。", "choice_a": "孤注一掷 (Boss 对手−1骰，开场半同化)", "choice_b": "保存体力 (无效果)"},
+	]
+
+## Retained only as narrative source material; it is not part of the v1.0 event pool.
+func _get_legacy_pool() -> Array[Dictionary]:
 	return [
 		# === INTEL — 情报类：揭示王国秘密 ===
 
@@ -142,8 +136,14 @@ func _on_choice_a(ev: Dictionary, result_label: Label) -> void:
 	result_label.text = r
 	GameState.event_notification = r
 	GameState.events_completed += 1
+	while _pending_discard:
+		await get_tree().process_frame
 	await get_tree().create_timer(2.2).timeout
 	if not is_instance_valid(result_label): return
+	if GameState.assimilation_count >= GameState.MAX_ASSIMILATION:
+		if _flow and _flow.has_method("handle_event_death"):
+			_flow.handle_event_death()
+		return
 	_emit_done()
 
 func _on_choice_b(ev: Dictionary, result_label: Label) -> void:
@@ -151,8 +151,14 @@ func _on_choice_b(ev: Dictionary, result_label: Label) -> void:
 	result_label.text = r
 	GameState.event_notification = r
 	GameState.events_completed += 1
+	while _pending_discard:
+		await get_tree().process_frame
 	await get_tree().create_timer(2.2).timeout
 	if not is_instance_valid(result_label): return
+	if GameState.assimilation_count >= GameState.MAX_ASSIMILATION:
+		if _flow and _flow.has_method("handle_event_death"):
+			_flow.handle_event_death()
+		return
 	_emit_done()
 
 func _apply_result(ev: Dictionary, choice: String) -> String:
@@ -160,6 +166,44 @@ func _apply_result(ev: Dictionary, choice: String) -> String:
 	var stage_bonus: int = 2 if (_stage >= 2 and ev["type"] == Category.RESOURCE) else 1
 
 	match eid:
+		"scrap_heap":
+			if choice == "a":
+				GameState.add_gold(15)
+				return "翻找完成，获得 15 金币。"
+			var item_id: String = _give_item("common")
+			return "拆出一枚可用芯片：%s。" % _item_name(item_id)
+		"black_vendor":
+			if choice == "a":
+				if not GameState.spend_gold(5):
+					return "金币不足，交易取消。"
+				var item_id: String = _pick_rare()
+				return "支付 5 金币，获得：%s。" % _item_name(item_id)
+			GameState.add_gold(20)
+			return "举报成功，获得 20 金币。"
+		"fault_protocol":
+			if choice == "a":
+				GameState.clear_assimilation()
+				return "备份恢复完成，半同化状态已清除。"
+			GameState.set_bonus_dice(1)
+			return "协议已拒绝，下一局以 6 颗骰子开场。"
+		"runaway_die":
+			if choice == "a":
+				GameState.next_battle_fixed_six = true
+				return "你抓住了骰子，下一局有一颗固定为⑥。"
+			GameState.add_gold(30)
+			return "你让它继续跳动，获得 30 金币。"
+		"memory_fragment":
+			if choice == "a":
+				var item_id: String = _pick_rare()
+				return "继承了上一位挑战者的道具：%s。" % _item_name(item_id)
+			GameState.add_gold(40)
+			return "继承了残片中的 40 金币。"
+		"last_stand":
+			if choice == "a":
+				GameState.next_boss_dice_penalty = 1
+				GameState.next_boss_start_assimilated = true
+				return "破坏程序已经植入：Boss 对手开场各少 1 骰，你将以半同化状态迎战。"
+			return "你保存了体力，没有额外效果。"
 		# INTEL
 		"intel_chip":
 			if choice == "a":
@@ -187,19 +231,19 @@ func _apply_result(ev: Dictionary, choice: String) -> String:
 					var item: String = _give_item("any")
 					return "终端爆出一阵电火花，掉出几件存货。\n老人笑了一声: '拿去，别像我一样。'"
 				return "空荡荡的货架。老清洁工叹了口气。\n'也好，至少你没伤着自己。'"
+			GameState.add_gold(25 * stage_bonus)
 			if randf() < 0.3:
 				GameState.assimilate()
-				return "警铃大作。卫兵的程序序列侵入了你的系统。\n获得 25 点，但被感染。"
-			GameState.add_gold(25 * stage_bonus)
+				return "警铃大作。卫兵的程序序列侵入了你的系统。\n获得 %d 点，但被感染。" % (25 * stage_bonus)
 			return "你砸开了后面的保险柜。\n%d 点。老人没有——或者说，来不及阻止。" % (25 * stage_bonus)
 		"res_chips":
 			if choice == "a":
 				GameState.add_gold(15 * stage_bonus)
 				return "你拾起几片完好的。\n上面刻着的字让你沉默了很久: '我接受。'"
+			GameState.add_gold(30 * stage_bonus)
 			if randf() < 0.35:
 				GameState.assimilate()
 				return "你吞下了太多。残次品的病毒在你体内炸开。\n获得 %d 点，但被感染。" % (30 * stage_bonus)
-			GameState.add_gold(30 * stage_bonus)
 			return "居然没事。%d 点净收。\n也许你真的是那个例外。" % (30 * stage_bonus)
 		"res_toolbox":
 			if choice == "a":
@@ -290,9 +334,7 @@ func _pick_legendary() -> String:
 
 func _filter_by_rarity(rarity: int) -> Array[String]:
 	var result: Array[String] = []
-	var unlocked: Array[String] = GameState.unlocked_items
-	for item in ItemData.get_consumable_pool():
-		if not (item.item_id in unlocked): continue
+	for item in ItemData.get_unlocked_pool():
 		match rarity:
 			0: if item.rarity == ItemData.Rarity.COMMON: result.append(item.item_id)
 			1: if item.rarity == ItemData.Rarity.RARE: result.append(item.item_id)
@@ -313,14 +355,40 @@ func _weighted_pick(weights: Array) -> int:
 		if roll < acc: return i
 	return weights.size() - 1
 
-func _has_narrative_this_stage() -> bool:
-	for eid in GameState._seen_events:
-		if eid.begins_with("narr_"): return true
-	return false
-
 func _remember(eid: String) -> void:
 	GameState._seen_events.append(eid)
 
 func _emit_done() -> void:
 	if _flow and _flow.has_method("emit_node_done"):
 		_flow.emit_node_done()
+
+func _on_discard_prompt(new_item_id: String) -> void:
+	_pending_discard = true
+	var popup := Panel.new()
+	popup.position = Vector2(290, 440); popup.size = Vector2(700, 220)
+	add_child(popup)
+	var title := Label.new()
+	title.text = "道具已满：选择一件替换，或放弃新道具"
+	title.position = Vector2(20, 12); title.size = Vector2(660, 30)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	popup.add_child(title)
+	for i in range(GameState.consumable_items.size()):
+		var idx: int = i
+		var button := Button.new()
+		var info = GameState.get_item_info(GameState.consumable_items[i])
+		button.text = "替换 %s" % (info.item_name if info else GameState.consumable_items[i])
+		button.position = Vector2(35 + i * 215, 60); button.size = Vector2(200, 44)
+		button.pressed.connect(func():
+			GameState.force_swap_consumable(new_item_id, idx)
+			_pending_discard = false
+			popup.queue_free()
+			EventBus.discard_resolved.emit())
+		popup.add_child(button)
+	var cancel := Button.new()
+	cancel.text = "放弃新道具"
+	cancel.position = Vector2(250, 130); cancel.size = Vector2(200, 44)
+	cancel.pressed.connect(func():
+		_pending_discard = false
+		popup.queue_free()
+		EventBus.discard_resolved.emit())
+	popup.add_child(cancel)

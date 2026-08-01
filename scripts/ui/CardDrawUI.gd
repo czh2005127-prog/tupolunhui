@@ -193,10 +193,7 @@ func _toggle_card(idx: int) -> void:
 		card = _boss_pool[idx]
 	else:
 		card = _pool[idx]
-	var already_idx: int = -1
-	for i in range(_selected.size()):
-		if _selected[i].card_id == card.card_id:
-			already_idx = i; break
+	var already_idx: int = _selected_indices.find(idx)
 
 	if already_idx >= 0:
 		_selected.remove_at(already_idx)
@@ -334,6 +331,9 @@ func _on_start() -> void:
 		final = _mixed_picks + _selected
 	else:
 		final = _selected.duplicate()
+	_start_selected_battle(final)
+
+func _start_selected_battle(final: Array) -> void:
 	queue_free()
 	if _flow_parent and _flow_parent.has_method("_on_cards_confirmed"):
 		_flow_parent._on_cards_confirmed(final)
@@ -352,8 +352,8 @@ func _rarity_name_for_stage(stage: int) -> String:
 
 func _boss_rarity_name_for_stage(stage: int) -> String:
 	match stage:
-		0: return "稀有卡"
-		1: return "史诗卡"
+		0: return "史诗卡"
+		1: return "传说卡"
 		2: return "传说卡"
 		3: return "创世卡"
 	return "稀有卡"

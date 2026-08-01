@@ -21,5 +21,5 @@ func describe_mutation() -> String:
         MutationType.INFECTIOUS_DIE:
             return "传染骰: 叫到传染点数必须跟叫"
         MutationType.FORBIDDEN_POINTS:
-            return "禁忌点数: 两个数字叫到即感染"
+            return "禁忌点数: 叫到者扣除1颗骰子"
     return "标准规则"
