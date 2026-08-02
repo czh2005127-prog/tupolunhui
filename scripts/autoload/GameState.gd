@@ -17,6 +17,10 @@ var current_node_index: int = 0
 var stages_cleared: Array[int] = []
 var boss_fragments: Array[String] = []
 var assimilation_curse: String = ""
+const STAGE_BREAK_TARGETS: Array[int] = [1500, 5000, 15000, 50000]
+var stage_break_scores: Array[int] = [0, 0, 0, 0]
+var current_battle_break_score: int = 0
+var current_break_streak: int = 0
 
 # Run stats
 var total_assimilations: int = 0
@@ -431,6 +435,53 @@ func _get_max_level(card_id: String) -> int:
 func get_run_rust_points() -> int:
 	return _run_rust_points
 
+func get_stage_break_target(stage: int = current_stage) -> int:
+	return STAGE_BREAK_TARGETS[clampi(stage, 0, STAGE_BREAK_TARGETS.size() - 1)]
+
+func get_stage_break_score(stage: int = current_stage) -> int:
+	if stage < 0 or stage >= stage_break_scores.size():
+		return 0
+	return stage_break_scores[stage]
+
+func is_stage_break_qualified(stage: int = current_stage) -> bool:
+	return get_stage_break_score(stage) >= get_stage_break_target(stage)
+
+func get_stage_break_rating(stage: int = current_stage) -> String:
+	var target: int = get_stage_break_target(stage)
+	var score: int = get_stage_break_score(stage)
+	if score >= target * 8: return "规则撕裂"
+	if score >= target * 4: return "极限破局"
+	if score >= target * 2: return "超额突破"
+	if score >= target: return "合格"
+	return "未合格"
+
+func begin_break_score_battle() -> void:
+	current_battle_break_score = 0
+	current_break_streak = 0
+	_emit_break_score_changed(0, "本局开始")
+
+func add_break_score(base_chips: int, tactical_multiplier: int, reason: String) -> int:
+	if base_chips <= 0:
+		return 0
+	current_break_streak = mini(current_break_streak + 1, 8)
+	var gain: int = base_chips * maxi(tactical_multiplier, 1) * current_break_streak
+	var stage: int = clampi(current_stage, 0, stage_break_scores.size() - 1)
+	stage_break_scores[stage] += gain
+	current_battle_break_score += gain
+	_emit_break_score_changed(gain, reason)
+	return gain
+
+func reset_break_score_streak() -> void:
+	if current_break_streak == 0:
+		return
+	current_break_streak = 0
+	_emit_break_score_changed(0, "连续得分中断")
+
+func _emit_break_score_changed(gain: int, reason: String) -> void:
+	EventBus.break_score_changed.emit(
+		get_stage_break_score(), current_battle_break_score, get_stage_break_target(),
+		gain, reason, current_break_streak)
+
 ## ---- Setup ----
 func setup_new_run() -> void:
 	gold = 0
@@ -442,6 +493,9 @@ func setup_new_run() -> void:
 	_pending_xp = 0
 	_new_levels.clear()
 	stages_cleared.clear()
+	stage_break_scores.assign([0, 0, 0, 0])
+	current_battle_break_score = 0
+	current_break_streak = 0
 	bosses_defeated.clear()
 	enemies_defeated_this_run = 0
 	final_stage_reached = 0
@@ -521,6 +575,9 @@ func capture_battle_entry(cards: Array) -> void:
 		"prisoner_breaches": prisoner_breaches,
 		"prisoner_identity_revealed": prisoner_identity_revealed,
 		"royal_fragment_available": royal_fragment_available,
+		"stage_break_scores": stage_break_scores.duplicate(),
+		"current_battle_break_score": current_battle_break_score,
+		"current_break_streak": current_break_streak,
 	}
 
 func clear_battle_entry() -> void:
@@ -562,6 +619,24 @@ func _restore_battle_entry(snapshot: Dictionary) -> void:
 	prisoner_breaches = int(snapshot.get("prisoner_breaches", 0))
 	prisoner_identity_revealed = bool(snapshot.get("prisoner_identity_revealed", false))
 	royal_fragment_available = bool(snapshot.get("royal_fragment_available", false))
+	stage_break_scores.assign(snapshot.get("stage_break_scores", [0, 0, 0, 0]))
+	while stage_break_scores.size() < STAGE_BREAK_TARGETS.size():
+		stage_break_scores.append(0)
+	current_battle_break_score = int(snapshot.get("current_battle_break_score", 0))
+	current_break_streak = int(snapshot.get("current_break_streak", 0))
+
+func prepare_boss_break_score_retry() -> bool:
+	if _battle_entry_snapshot.is_empty():
+		return false
+	var preserved_scores: Array[int] = stage_break_scores.duplicate()
+	var snapshot: Dictionary = _battle_entry_snapshot.duplicate(true)
+	_restore_battle_entry(snapshot)
+	stage_break_scores.assign(preserved_scores)
+	current_battle_break_score = 0
+	current_break_streak = 0
+	current_battle_seed = 0
+	_emit_break_score_changed(0, "Boss重战")
+	return true
 
 func consume_royal_fragment_retry(persist: bool = true) -> bool:
 	if not royal_fragment_available or _battle_entry_snapshot.is_empty():
@@ -612,6 +687,9 @@ func save_run(_dice_game_virus: int = 0, temporarily_disabled_items: Array = [],
 			"prisoner_breaches": prisoner_breaches,
 			"prisoner_identity_revealed": prisoner_identity_revealed,
 			"royal_fragment_available": royal_fragment_available,
+			"stage_break_scores": stage_break_scores.duplicate(),
+			"current_battle_break_score": current_battle_break_score,
+			"current_break_streak": current_break_streak,
 		}
 	var f := FileAccess.open("user://save_game.dat", FileAccess.WRITE)
 	if not f:

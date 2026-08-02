@@ -95,6 +95,7 @@ var _tutorial_opening_done: bool = false
 func start_game(card1: Resource, card2: Resource, has_dark_die: bool = false, card3: Resource = null, _is_boss: bool = false) -> void:
 	if GameState.current_battle_seed != 0:
 		seed(GameState.current_battle_seed)
+	GameState.begin_break_score_battle()
 	_contract_start_items_used = GameState.items_used
 	_public_player_items_used.clear()
 	if not EventBus.item_used.is_connected(_on_public_player_item_used):
@@ -928,6 +929,8 @@ func _ai_turn(ai_id: String) -> void:
 	if action == "challenge":
 		_resolve_challenge(ai_id, last_bidder); return
 	elif action in ["bid", "tutorial_false_bid"]:
+		if last_bidder == "player":
+			_award_accepted_player_bluff()
 		var bid: Dictionary
 		if action == "tutorial_false_bid":
 			var total_dice_now: int = player_cup.dice.size()
@@ -968,24 +971,11 @@ func get_all_ai_names() -> Array:
 ## Resolve challenge
 func _resolve_challenge(challenger: String, target: String) -> void:
 	var target_value: int = current_bid_value
-	var total_match: int = 0
-	var six_wild: bool = _twoface_present
-	if player_virus < PLAYER_MAX_VIRUS: total_match += player_cup.count_matches_revealing(target_value, six_wild)
-	if player_virus < PLAYER_MAX_VIRUS and GameState.assimilation_curse == "double_wild" and target_value not in [1, 3]:
-		for die in player_cup.dice:
-			if die.value == 3: total_match += 1
-	if ai1_virus < AI_MAX_VIRUS: total_match += ai_cup_1.count_matches_revealing(target_value, six_wild)
-	if ai2_virus < AI_MAX_VIRUS: total_match += ai_cup_2.count_matches_revealing(target_value, six_wild)
-	if ai3_virus < AI_MAX_VIRUS: total_match += ai_cup_3.count_matches_revealing(target_value, six_wild)
-	# 幸运儿 Lv.3: 他的①不能当万能
-	if target_value != 1 and GameState.get_card_level("lucky_one") >= 3:
-		for lucky_id in _living_card_ais("lucky_one"):
-			var lucky_cup: RefCounted = _get_ai_cup(lucky_id)
-			if lucky_cup:
-				for die in lucky_cup.dice:
-					if die.value == 1:
-						total_match -= 1  # 他的①不算万能
+	var total_match: int = _count_total_matches_for_score(target_value)
 	var bid_true: bool = total_match >= current_bid_count
+	var loser: String = target if not bid_true else challenger
+	var winner: String = challenger if not bid_true else target
+	_award_player_challenge_score(challenger, target, total_match, bid_true, loser)
 	if challenger == "player" and not bid_true:
 		if _tutorial_active:
 			GameState.tutorial_completed = true
@@ -996,8 +986,6 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 		for observer in [ai_controller_1, ai_controller_2, ai_controller_3]:
 			if observer and observer.has_method("observe_player_bid"):
 				observer.observe_player_bid(bid_true)
-	var loser: String = target if not bid_true else challenger
-	var winner: String = challenger if not bid_true else target
 	# Save pre-infection state for dice display
 	var was_player_dead: bool = player_virus >= PLAYER_MAX_VIRUS
 	var was_ai1_dead: bool = ai1_virus >= AI_MAX_VIRUS
@@ -1134,6 +1122,76 @@ func _resolve_challenge(challenger: String, target: String) -> void:
 				GameState.add_consumable_item(item_id)
 		game_over.emit("player"); return
 	_continue_round()
+
+func _count_total_matches_for_score(target_value: int) -> int:
+	var total_match: int = 0
+	var six_wild: bool = _twoface_present
+	if player_virus < PLAYER_MAX_VIRUS: total_match += player_cup.count_matches_revealing(target_value, six_wild)
+	if player_virus < PLAYER_MAX_VIRUS and GameState.assimilation_curse == "double_wild" and target_value not in [1, 3]:
+		for die in player_cup.dice:
+			if die.value == 3: total_match += 1
+	if ai1_virus < AI_MAX_VIRUS: total_match += ai_cup_1.count_matches_revealing(target_value, six_wild)
+	if ai2_virus < AI_MAX_VIRUS: total_match += ai_cup_2.count_matches_revealing(target_value, six_wild)
+	if ai3_virus < AI_MAX_VIRUS: total_match += ai_cup_3.count_matches_revealing(target_value, six_wild)
+	# 幸运儿 Lv.3: 他的①不能当万能
+	if target_value != 1 and GameState.get_card_level("lucky_one") >= 3:
+		for lucky_id in _living_card_ais("lucky_one"):
+			var lucky_cup: RefCounted = _get_ai_cup(lucky_id)
+			if lucky_cup:
+				for die in lucky_cup.dice:
+					if die.value == 1:
+						total_match -= 1  # 他的①不算万能
+	return maxi(total_match, 0)
+
+func _living_dice_total_for_score() -> int:
+	var total: int = 0
+	if player_virus < PLAYER_MAX_VIRUS and player_cup: total += player_cup.dice.size()
+	if ai1_virus < AI_MAX_VIRUS and ai_cup_1: total += ai_cup_1.dice.size()
+	if ai2_virus < AI_MAX_VIRUS and ai_cup_2: total += ai_cup_2.dice.size()
+	if ai3_virus < AI_MAX_VIRUS and ai_cup_3: total += ai_cup_3.dice.size()
+	return total
+
+func _break_score_multiplier(precise: bool) -> Dictionary:
+	var multiplier: int = 1
+	var tags: Array[String] = []
+	if precise:
+		multiplier *= 3
+		tags.append("精准×3")
+	var total_dice: int = _living_dice_total_for_score()
+	if total_dice > 0 and current_bid_count >= ceili(float(total_dice) / 2.0):
+		multiplier *= 2
+		tags.append("高压×2")
+	var player_dice: int = player_cup.dice.size() if player_cup else 0
+	if player_dice == 1:
+		multiplier *= 4
+		tags.append("残骰×4")
+	elif player_dice == 2:
+		multiplier *= 2
+		tags.append("残骰×2")
+	return {"value": multiplier, "tags": tags}
+
+func _award_break_score(base_chips: int, reason: String, precise: bool = false) -> void:
+	var multiplier_data: Dictionary = _break_score_multiplier(precise)
+	var detail: String = reason
+	var tags: Array = multiplier_data.tags
+	if not tags.is_empty():
+		detail += " · " + " ".join(tags)
+	var gain: int = GameState.add_break_score(base_chips, int(multiplier_data.value), detail)
+	if gain > 0:
+		EventBus.hint_show.emit("破局·%s：+%d" % [detail, gain], 3.0, Color(0.98, 0.78, 0.29))
+
+func _award_player_challenge_score(challenger: String, target: String, actual: int, bid_true: bool, loser: String) -> void:
+	if challenger == "player" and not bid_true:
+		_award_break_score(current_bid_count * 100, "看破", actual == current_bid_count - 1)
+	elif target == "player" and bid_true:
+		_award_break_score(current_bid_count * 100, "镇场", actual == current_bid_count)
+	elif loser == "player":
+		GameState.reset_break_score_streak()
+
+func _award_accepted_player_bluff() -> void:
+	var actual: int = _count_total_matches_for_score(current_bid_value)
+	if actual < current_bid_count:
+		_award_break_score(current_bid_count * 50, "瞒天")
 
 func _apply_abyss_round_end() -> void:
 	for abyss_id in _living_card_ais("unknown_abyss"):

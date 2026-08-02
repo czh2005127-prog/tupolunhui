@@ -289,6 +289,15 @@ func _advance_node() -> void:
 func _on_shop_exited() -> void:
 	await _advance_node()
 
+func retry_boss_for_break_score() -> void:
+	if not _is_boss_node or _drawn_cards.is_empty():
+		return
+	if not GameState.prepare_boss_break_score_retry():
+		return
+	GameState.capture_battle_entry(_drawn_cards)
+	GameState.save_run()
+	_run_node(NodeType.BOSS)
+
 func _award_boss_fragment(card_id: String) -> void:
 	var result: String = GameState.add_boss_fragment(card_id)
 	var fragment_name: String = BossFragmentDataRef.get_fragment_name(card_id)

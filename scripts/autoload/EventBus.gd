@@ -9,6 +9,7 @@ signal bid_made(player: String, count: int, value: int)
 signal challenged(challenger: String, target: String)
 signal challenge_result(winner: String, loser: String, actual_count: int, bid_count: int)
 signal round_ended
+signal break_score_changed(stage_score: int, battle_score: int, target_score: int, gain: int, reason: String, streak: int)
 
 # Assimilation signals
 signal half_assimilated  # 1st infection

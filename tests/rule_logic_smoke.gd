@@ -24,6 +24,8 @@ func _ready() -> void:
 	_test_three_stage_curve()
 	_test_upgrade_migration()
 	_test_battle_entry_snapshot()
+	_test_break_score_progression()
+	_test_break_score_dice_awards()
 	_test_prisoner_king_arc()
 	_test_duplicate_card_weight()
 	_test_event_score_weight()
@@ -158,6 +160,66 @@ func _test_battle_entry_snapshot() -> void:
 	GameState.assimilation_count = 0
 	GameState.consumable_items.clear()
 	GameState.boss_fragments.clear()
+
+func _test_break_score_progression() -> void:
+	var old_stage: int = GameState.current_stage
+	var old_scores: Array[int] = GameState.stage_break_scores.duplicate()
+	var old_battle_score: int = GameState.current_battle_break_score
+	var old_streak: int = GameState.current_break_streak
+	GameState.current_stage = 0
+	GameState.stage_break_scores.assign([0, 0, 0, 0])
+	GameState.begin_break_score_battle()
+	assert(GameState.get_stage_break_target() == 1500)
+	assert(GameState.add_break_score(100, 3, "精准看破") == 300)
+	assert(GameState.add_break_score(100, 1, "镇场") == 200, "第二次连续得分必须应用×2")
+	GameState.reset_break_score_streak()
+	assert(GameState.add_break_score(100, 1, "瞒天") == 100)
+	assert(GameState.get_stage_break_score() == 600 and GameState.current_battle_break_score == 600)
+	GameState.stage_break_scores[0] = 1500
+	assert(GameState.is_stage_break_qualified() and GameState.get_stage_break_rating() == "合格")
+	var jack = CardDataScript.get_card_by_id("jack_crt")
+	var warrior = CardDataScript.get_card_by_id("rust_warrior")
+	GameState.capture_battle_entry([jack, warrior])
+	GameState.stage_break_scores[0] = 2300
+	assert(GameState.prepare_boss_break_score_retry())
+	assert(GameState.stage_break_scores[0] == 2300, "Boss未达标重战必须保留已获得的本层分数")
+	assert(GameState.current_battle_break_score == 0 and GameState.current_break_streak == 0)
+	assert(GameState.current_battle_seed == 0, "Boss计分重战必须生成新的随机种子")
+	GameState.clear_battle_entry()
+	GameState.current_stage = old_stage
+	GameState.stage_break_scores.assign(old_scores)
+	GameState.current_battle_break_score = old_battle_score
+	GameState.current_break_streak = old_streak
+
+func _test_break_score_dice_awards() -> void:
+	var old_stage: int = GameState.current_stage
+	var old_scores: Array[int] = GameState.stage_break_scores.duplicate()
+	GameState.current_stage = 0
+	GameState.stage_break_scores.assign([0, 0, 0, 0])
+	GameState.begin_break_score_battle()
+	var game = DiceGameScript.new()
+	game.player_cup = DiceCupScript.new(2)
+	game.ai_cup_1 = DiceCupScript.new(2)
+	game.ai_cup_2 = DiceCupScript.new(0)
+	game.ai_cup_3 = DiceCupScript.new(0)
+	for die in game.player_cup.dice: die.value = 2
+	for die in game.ai_cup_1.dice: die.value = 2
+	game.ai1_virus = 0
+	game.ai2_virus = game.AI_MAX_VIRUS
+	game.ai3_virus = game.AI_MAX_VIRUS
+	game.current_bid_count = 3
+	game.current_bid_value = 4
+	game._award_player_challenge_score("player", "ai1", 2, false, "ai1")
+	assert(GameState.get_stage_break_score() == 3600, "精准看破、高压叫牌和两颗残骰倍率必须共同结算")
+	game.current_bid_count = 3
+	game.current_bid_value = 6
+	game._award_accepted_player_bluff()
+	assert(GameState.get_stage_break_score() > 3600, "AI放过虚假玩家叫牌时必须结算瞒天得分")
+	game.free()
+	GameState.current_stage = old_stage
+	GameState.stage_break_scores.assign(old_scores)
+	GameState.current_battle_break_score = 0
+	GameState.current_break_streak = 0
 
 func _test_prisoner_king_arc() -> void:
 	GameState.prisoner_offer_stages.clear()
@@ -314,11 +376,19 @@ func _test_tutorial_bar_separation() -> void:
 	assert(hud.get("_tutorial_label").text == "教程测试")
 	assert(hud.get("_notify_label").text != "教程测试", "教程不得覆盖现有提示栏")
 	assert(hud.find_child("TutorialReviewButton", true, false) != null)
+	assert(hud.find_child("BreakScoreBoard", true, false) != null, "每场对局必须显示独立实时计分板")
 	hud._toggle_tutorial_review()
 	assert(hud.get("_tutorial_review_panel").visible, "教程回顾栏应能独立打开")
 	assert("教程测试" in hud.get("_tutorial_review_text").text)
 	hud._on_dice_revealed([1, 4], [2, 2, 5], [3], [], true, true, false, false)
 	assert("你（2颗）" in hud._get_final_dice_summary() and "（3颗）" in hud._get_final_dice_summary(), "对局结算必须保留最后开骰的数量与点数")
+	var old_stage_score: int = GameState.stage_break_scores[GameState.current_stage]
+	GameState.stage_break_scores[GameState.current_stage] = 0
+	hud._show_boss_break_qualification()
+	var qualification = hud.find_child("BossBreakQualification", true, false)
+	assert(qualification != null and qualification.find_child("FinalDiceSummary", true, false) != null, "Boss胜利后必须显示含最后开骰的合格判定页")
+	qualification.queue_free()
+	GameState.stage_break_scores[GameState.current_stage] = old_stage_score
 	hud._show_death_screen()
 	var final_dice_panel = hud.find_child("FinalDiceSummary", true, false)
 	assert(final_dice_panel != null and "最后开骰" in final_dice_panel.text, "死亡结算必须展示最后开骰")

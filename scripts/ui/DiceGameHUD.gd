@@ -38,6 +38,8 @@ var _btn_challenge_lbl: Label
 var _btn_bid: ColorRect
 var _btn_bid_lbl: Label
 var points_label: Label
+var _break_score_panel: ColorRect
+var _break_score_label: RichTextLabel
 var _btn_count_minus: ColorRect
 var _btn_count_minus_lbl: Label
 var _btn_count_plus: ColorRect
@@ -103,6 +105,7 @@ func _ready() -> void:
 	_build_all_ui()
 	_connect_all()
 	_refresh_points()
+	_refresh_break_score()
 	_refresh_virus()
 	# Force show buttons immediately (overrides whatever _build_all_ui set)
 	_show_actions(true)
@@ -194,6 +197,24 @@ func _build_all_ui() -> void:
 	points_label = _make_label("", Vector2(MX + MW - 190, 2), Vector2(120, 18), Color(0.29, 0.29, 0.33), 9)
 	points_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	add_child(points_label)
+	_break_score_panel = ColorRect.new()
+	_break_score_panel.name = "BreakScoreBoard"
+	_break_score_panel.position = Vector2(MX + MW - 150, 22)
+	_break_score_panel.size = Vector2(145, 34)
+	_break_score_panel.color = Color(0.09, 0.065, 0.02, 0.96)
+	_break_score_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_break_score_panel.z_index = 20
+	add_child(_break_score_panel)
+	_add_border(_break_score_panel, 145, 34, Color(0.98, 0.78, 0.29), 1)
+	_break_score_label = RichTextLabel.new()
+	_break_score_label.bbcode_enabled = true
+	_break_score_label.fit_content = false
+	_break_score_label.scroll_active = false
+	_break_score_label.position = Vector2(5, 1)
+	_break_score_label.size = Vector2(135, 31)
+	_break_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_break_score_label.add_theme_font_size_override("normal_font_size", 9)
+	_break_score_panel.add_child(_break_score_label)
 
 	# Dedicated tutorial strip. It occupies the unused space above opponent cards
 	# and never replaces the normal skill/item notification strip.
@@ -743,6 +764,7 @@ func _connect_all() -> void:
 	# Buttons already connected via _make_btn_at — no extra gui_input needed
 
 	EventBus.gold_changed.connect(_refresh_points)
+	EventBus.break_score_changed.connect(_on_break_score_changed)
 	EventBus.half_assimilated.connect(_on_half_assimilated)
 	EventBus.card_skill_triggered.connect(_on_card_skill_triggered)
 	EventBus.hint_show.connect(_on_hint_show)
@@ -1214,21 +1236,11 @@ var _is_boss_match: bool = false
 func _on_game_over(winner: String) -> void:
 	_game_over_winner = winner
 	if winner == "player":
-		var payout_reward: int = game_ctrl.claim_payout_reward() if game_ctrl and game_ctrl.has_method("claim_payout_reward") else 0
-		if payout_reward > 0:
-			GameState.add_gold(payout_reward)
-			EventBus.hint_show.emit("清算完成：胜利额外获得%d金币" % payout_reward, 3.0, Color(0.98, 0.78, 0.29))
-		_resolve_prisoner_contract()
-		if status_label:
-			status_label.text = "你赢了!"
-		# 追踪：击败敌人计数
-		GameState.enemies_defeated_this_run += 1
-		var base_xp: int = GameState.XP_PER_BOSS if _is_boss_match else GameState.XP_PER_ENEMY
-		var reward_multiplier: float = GameState.get_battle_reward_multiplier(_drawn_cards)
-		GameState._pending_xp += maxi(base_xp, floori(base_xp * reward_multiplier))
 		_show_actions(false)
-		# Rewards are resolved centrally by GameFlow.
-		_show_victory_screen(false)
+		if _is_boss_match:
+			_show_boss_break_qualification()
+		else:
+			_complete_player_victory()
 	else:
 		if status_label:
 			status_label.text = "你死机了... 蓝屏"
@@ -1237,6 +1249,67 @@ func _on_game_over(winner: String) -> void:
 			_show_royal_fragment_retry()
 		else:
 			_finalize_run_death()
+
+func _complete_player_victory() -> void:
+	var payout_reward: int = game_ctrl.claim_payout_reward() if game_ctrl and game_ctrl.has_method("claim_payout_reward") else 0
+	if payout_reward > 0:
+		GameState.add_gold(payout_reward)
+		EventBus.hint_show.emit("清算完成：胜利额外获得%d金币" % payout_reward, 3.0, Color(0.98, 0.78, 0.29))
+	_resolve_prisoner_contract()
+	if status_label:
+		status_label.text = "你赢了!"
+	GameState.enemies_defeated_this_run += 1
+	var base_xp: int = GameState.XP_PER_BOSS if _is_boss_match else GameState.XP_PER_ENEMY
+	var reward_multiplier: float = GameState.get_battle_reward_multiplier(_drawn_cards)
+	GameState._pending_xp += maxi(base_xp, floori(base_xp * reward_multiplier))
+	_show_victory_screen(false)
+
+func _show_boss_break_qualification() -> void:
+	var overlay := ColorRect.new()
+	overlay.name = "BossBreakQualification"
+	overlay.position = Vector2.ZERO
+	overlay.size = Vector2(1280, 720)
+	overlay.color = Color(0.012, 0.01, 0.025, 0.97)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 520
+	add_child(overlay)
+	var qualified: bool = GameState.is_stage_break_qualified()
+	var score: int = GameState.get_stage_break_score()
+	var target: int = GameState.get_stage_break_target()
+	var title := Label.new()
+	title.text = "封印已解锁" if qualified else "封印拒绝开启"
+	title.position = Vector2(240, 70)
+	title.size = Vector2(800, 60)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 34)
+	title.add_theme_color_override("font_color", Color(0.36, 0.79, 0.65) if qualified else Color(0.94, 0.4, 0.4))
+	overlay.add_child(title)
+	var result := RichTextLabel.new()
+	result.bbcode_enabled = true
+	result.text = "[center]本层破局值\n[color=#FFD766][font_size=34]%d[/font_size][/color] / %d\n\n评价：[color=%s]%s[/color]\n本局新增：+%d[/center]" % [
+		score, target, "#5CDB9E" if qualified else "#F06A6A",
+		GameState.get_stage_break_rating(), GameState.current_battle_break_score]
+	result.position = Vector2(290, 155)
+	result.size = Vector2(700, 190)
+	result.add_theme_font_size_override("normal_font_size", 18)
+	overlay.add_child(result)
+	_add_final_dice_panel(overlay, Vector2(290, 350), Vector2(700, 115))
+	var message := Label.new()
+	message.text = "盒子的封印已经裂开。你被允许前往下一层。" if qualified else "击败对手还不够。盒子要求你制造更高的破局值。"
+	message.position = Vector2(250, 485)
+	message.size = Vector2(780, 40)
+	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	message.add_theme_font_size_override("font_size", 16)
+	overlay.add_child(message)
+	if qualified:
+		_make_btn_at(overlay, Vector2(390, 560), Vector2(500, 64), "合格 · 进入Boss结算", Color(0.36, 0.79, 0.65), true,
+			func(): overlay.queue_free(); _complete_player_victory())
+	else:
+		_make_btn_at(overlay, Vector2(390, 560), Vector2(500, 64), "分数不足 · 重新挑战Boss", Color(0.94, 0.4, 0.4), true,
+			func():
+				overlay.queue_free()
+				if flow_parent and flow_parent.has_method("retry_boss_for_break_score"):
+					flow_parent.retry_boss_for_break_score())
 
 func _resolve_prisoner_contract() -> void:
 	if GameState.current_contract.is_empty() or not game_ctrl:
@@ -1850,6 +1923,17 @@ func _clear_event_notify(_stage: int = 0) -> void:
 func _refresh_points(_amt: int = 0) -> void:
 	if points_label:
 		points_label.text = "金币 %d" % GameState.gold
+
+func _refresh_break_score(gain: int = 0, reason: String = "") -> void:
+	if _break_score_label:
+		_break_score_label.text = "[color=#FFD766]破局 %d/%d[/color]\n本局 +%d  连续×%d" % [
+			GameState.get_stage_break_score(), GameState.get_stage_break_target(),
+			GameState.current_battle_break_score, GameState.current_break_streak]
+	if gain > 0 and not reason.is_empty():
+		_log_event("破局·%s +%d" % [reason, gain])
+
+func _on_break_score_changed(_stage_score: int, _battle_score: int, _target_score: int, gain: int, reason: String, _streak: int) -> void:
+	_refresh_break_score(gain, reason)
 
 # --- item selection mode (e.g. reroll_stone) ---
 
