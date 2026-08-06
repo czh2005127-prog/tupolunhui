@@ -9,7 +9,7 @@ const BG_DEEP: Color         = Color(0.025, 0.025, 0.03)       # 最暗底色
 const BG_PANEL: Color        = Color(0.04, 0.04, 0.06)         # 面板暗色
 const BG_CARD: Color         = Color(0.08, 0.08, 0.10)         # 卡片底色
 const BG_LEFT: Color         = Color(0.067, 0.067, 0.083)      # 左侧面板
-const BG_SLOT: Color         = Color(0.10, 0.10, 0.11)         # 道具槽位
+const BG_SLOT: Color         = Color(0.10, 0.10, 0.11)         # 卡牌槽位
 
 ## Borders
 const BORDER_SUBTLE: Color   = Color(0.16, 0.16, 0.16)         # 普通边框
@@ -20,10 +20,10 @@ const BORDER_STRONG: Color   = Color(0.25, 0.25, 0.25)         # 强边框
 const GOLD: Color            = Color(0.98, 0.78, 0.29)         # 金色主色调
 const GREEN: Color           = Color(0.36, 0.79, 0.65)         # 骰子局/成功
 const BLUE: Color            = Color(0.22, 0.50, 0.87)         # 确认/小点数
-const RED: Color             = Color(0.89, 0.29, 0.29)         # 质疑/大点数/危险
+const RED: Color             = Color(0.89, 0.29, 0.29)         # 倒计时/危险
 const PINK: Color            = Color(0.83, 0.33, 0.49)         # 商店
-const CYAN: Color            = Color(0.52, 0.72, 0.92)         # 稀有道具
-const ORANGE: Color          = Color(0.94, 0.59, 0.16)         # 即用道具标题
+const CYAN: Color            = Color(0.52, 0.72, 0.92)         # 稀有卡牌
+const ORANGE: Color          = Color(0.94, 0.59, 0.16)         # 行动卡标题
 const PURPLE: Color          = Color(0.33, 0.29, 0.72)         # 点数1
 
 ## Semantic

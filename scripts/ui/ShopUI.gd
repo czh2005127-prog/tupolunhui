@@ -1,531 +1,151 @@
-## ShopUI — 展示架风格: 情报横条(上) → 货架卡片(中) → 道具挂钩(下)
 extends Control
 
+const PlayerCardRef := preload("res://scripts/resources/PlayerCardData.gd")
+
 var _flow: Node
-var _refresh_count: int = 0
-var _shelf_root: Control
-var _gamble_plays: int = 0
+var _page := "packs"
+var _pack_stock: Array[Dictionary] = []
+var _single_stock: Array[Dictionary] = []
+var _refresh_counts := {"packs":0,"singles":0}
+var _gamble_plays := 0
+var _free_refresh_available:=false
+var _content: GridContainer
+var _gold_label: Label
+var _status: Label
+var _tabs: HBoxContainer
 
-func set_parent_flow(f: Node) -> void:
-	_flow = f
-	_refresh_count = 0
-	_gamble_plays = 0
-	GameState.refresh_shop(6)
-	_build()
-	if GameState.tutorial_enabled and GameState.tutorial_completed and not GameState.tutorial_shop_seen:
-		GameState.tutorial_shop_seen = true
-		GameState.save_progress()
-		_show_shop_tutorial()
+func set_parent_flow(flow:Node)->void:_flow=flow
 
-func _show_shop_tutorial() -> void:
-	var banner := Label.new(); banner.name = "TutorialBanner"; banner.text = "商店：金币购买一次性道具，最多携带6个。也可刷新货架，或尝试两次店内赌桌。"; banner.position = Vector2(250, 650); banner.size = Vector2(780, 38); banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; banner.add_theme_font_size_override("font_size", 15); banner.add_theme_color_override("font_color", Color(0.36, 0.79, 0.65)); add_child(banner)
-	var highlighted: CanvasItem = null
-	for item in GameState.shop_items:
-		if item.price <= GameState.gold:
-			highlighted = find_child("Card_%s" % item.item_id, true, false) as CanvasItem
-			break
-	if highlighted: highlighted.modulate = Color(1.0, 0.88, 0.42, 1.0)
-	var tween := create_tween(); tween.tween_interval(9.0); tween.tween_property(banner, "modulate:a", 0.0, 1.0); tween.tween_callback(func():
-		if is_instance_valid(highlighted): highlighted.modulate = Color.WHITE
-		banner.queue_free()
-	)
+func _ready()->void:
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_free_refresh_available=bool(GameState.next_battle_modifiers.get("free_shop_refresh",false)) or "prep_free_refresh" in GameState.purchased_tech_nodes
+	_generate_stocks();_build()
+	EventBus.shop_entered.emit()
 
-func _build() -> void:
-	for child in get_children():
-		child.queue_free()
+func _generate_stocks()->void:
+	_generate_pack_stock();_generate_single_stock()
 
-	var bg := ColorRect.new()
-	bg.color = Color(0.027, 0.027, 0.039)
-	bg.anchor_right = 1.0; bg.anchor_bottom = 1.0
-	add_child(bg)
+func _generate_pack_stock()->void:
+	_pack_stock=[_make_pack("普通卡包",28,"normal"),_make_pack("高级卡包",45,"advanced"),_make_pack("禁忌混合包",34,"forbidden")]
+	var advanced_chance: float = float([0.2,0.3,0.4,0.5][clampi(GameState.current_stage,0,3)])
+	for _i in range(3):
+		var advanced: bool = randf() < advanced_chance
+		_pack_stock.append(_make_pack("高级卡包" if advanced else "普通卡包",45 if advanced else 28,"advanced" if advanced else "normal"))
+	_pack_stock.shuffle()
 
-	# ── Top bar ──
-	_draw_topbar()
-	# ── Intel strip ──
-	_draw_intel_strip()
-	# ── Shelf + cards ──
-	_draw_shelf()
-	# ── Inventory hooks ──
-	_draw_inv_hooks()
+func _generate_single_stock()->void:
+	_single_stock.clear()
+	var all:=PlayerCardRef.get_all_cards();all.shuffle()
+	for i in range(6):
+		var card:PlayerCardData=all[i];_single_stock.append({"kind":"single","name":card.card_name,"price":[8,20,48][int(card.rarity)],"card_id":card.card_id,"sold":false})
 
-# ═══════════════════════════════════════════════
-# TOP BAR
-# ═══════════════════════════════════════════════
-func _draw_topbar() -> void:
-	var y := 14.0
-	var gold := Label.new()
-	gold.name = "GoldLbl"
-	gold.text = "%d" % GameState.gold
-	gold.position = Vector2(30, y)
-	gold.add_theme_font_size_override("font_size", 15)
-	gold.add_theme_color_override("font_color", Color(0.835, 0.647, 0.208))
-	add_child(gold)
+func _make_pack(name:String,price:int,grade:String)->Dictionary:
+	var cards:Array[String]=[];var count:=2 if grade=="forbidden" else 6
+	var themes:=["骰子","骰型","点数","倍率","防护","牌库","金币"]
+	var theme:String="混合" if grade=="forbidden" else str(themes[randi()%themes.size()])
+	for _i in range(count):
+		var roll:=randf();var rarity:=0
+		if grade=="normal":rarity=2 if roll>=0.98 else (1 if roll>=0.82 else 0)
+		elif grade=="advanced":rarity=2 if roll>=0.85 else (1 if roll>=0.35 else 0)
+		else:rarity=2 if roll>=0.85 else 1
+		var pool:Array=PlayerCardRef.get_pool(rarity);var themed:Array=[]
+		if theme!="混合" and randf()<0.8:
+			for card in pool:
+				if card.category==theme:themed.append(card)
+		if not themed.is_empty():pool=themed
+		cards.append(pool[randi()%pool.size()].card_id)
+	return {"kind":"pack","grade":grade,"name":"%s·%s"%[theme,name] if theme!="混合" else name,"price":price,"cards":cards,"sold":false}
 
-	var stage_names: Array[String] = ["破烂后院", "地下赌场", "黑帮私局", "终极赌场"]
-	var tag := Label.new()
-	tag.text = "%s · 商店" % stage_names[clamp(GameState.current_stage, 0, 3)]
-	tag.position = Vector2(100, y + 2)
-	tag.add_theme_font_size_override("font_size", 12)
-	tag.add_theme_color_override("font_color", Color(0.35, 0.35, 0.42))
-	add_child(tag)
+func _build()->void:
+	for child in get_children():child.queue_free()
+	var bg:=ColorRect.new();bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);bg.color=Color(0.035,0.026,0.02);add_child(bg)
+	var title:=_label("木盒商店",32,Color(0.96,0.76,0.31));title.position=Vector2(40,24);title.size=Vector2(350,48);add_child(title)
+	_gold_label=_label("金币：%d"%GameState.gold,23,Color(0.95,0.78,0.3));_gold_label.position=Vector2(995,30);_gold_label.size=Vector2(230,38);_gold_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT;add_child(_gold_label)
+	_tabs=HBoxContainer.new();_tabs.position=Vector2(40,92);_tabs.size=Vector2(500,52);_tabs.add_theme_constant_override("separation",12);add_child(_tabs)
+	var pack_btn:=Button.new();pack_btn.text="卡包";pack_btn.custom_minimum_size=Vector2(180,48);pack_btn.pressed.connect(func():_page="packs";_draw_stock());_tabs.add_child(pack_btn)
+	var single_btn:=Button.new();single_btn.text="单卡";single_btn.custom_minimum_size=Vector2(180,48);single_btn.pressed.connect(func():_page="singles";_draw_stock());_tabs.add_child(single_btn)
+	_content=GridContainer.new();_content.columns=3;_content.position=Vector2(40,165);_content.size=Vector2(1200,400);_content.add_theme_constant_override("h_separation",18);_content.add_theme_constant_override("v_separation",18);add_child(_content)
+	var refresh:=Button.new();refresh.position=Vector2(40,610);refresh.size=Vector2(210,52);refresh.pressed.connect(_refresh_page);add_child(refresh);refresh.name="RefreshButton"
+	var gamble:=Button.new();gamble.text="店内骰桌";gamble.position=Vector2(285,610);gamble.size=Vector2(210,52);gamble.pressed.connect(_open_gamble);add_child(gamble)
+	var leave:=Button.new();leave.text="离开商店";leave.position=Vector2(1010,610);leave.size=Vector2(220,52);leave.pressed.connect(_leave);add_child(leave)
+	_status=_label("行前可以保留金币，也可以现在补强牌库。",16,Color(0.7,0.72,0.75));_status.position=Vector2(530,620);_status.size=Vector2(450,35);add_child(_status)
+	_draw_stock()
 
-	var exit := Button.new()
-	exit.text = "退出"
-	exit.position = Vector2(1200, y - 2); exit.size = Vector2(56, 24)
-	exit.flat = true
-	var es := StyleBoxFlat.new(); es.bg_color = Color(0.12, 0.12, 0.18)
-	exit.add_theme_stylebox_override("normal", es)
-	exit.add_theme_font_size_override("font_size", 11)
-	exit.pressed.connect(_on_continue)
-	add_child(exit)
-
-	var gamble := Button.new()
-	gamble.name = "GambleBtn"
-	gamble.text = "店内赌桌（%d/2）" % _gamble_plays
-	gamble.position = Vector2(1010, y - 2); gamble.size = Vector2(175, 24)
-	gamble.pressed.connect(_open_gamble_table)
-	add_child(gamble)
-
-# ═══════════════════════════════════════════════
-# INTEL STRIP
-# ═══════════════════════════════════════════════
-func _draw_intel_strip() -> void:
-	var y := 50.0
-	var strip_h := 46.0
-	var x := 30.0
-	var col_w := 280
-
-	var bg := ColorRect.new()
-	bg.name = "IntelStrip"
-	bg.position = Vector2(x, y)
-	bg.size = Vector2(1220, strip_h)
-	bg.color = Color(0.039, 0.039, 0.055)
-	add_child(bg)
-
-	var stage_names: Array[String] = ["破烂后院", "地下赌场", "黑帮私局", "终极赌场"]
-	var mutation_names: Array[String] = ["标准规则", "每人1颗暗骰", "黑吃黑", "圣洁禁忌"]
-	var boss_names: Array[String] = ["瘸腿老杰克", "独眼龙老板娘", "西装暴徒三人组", "骰子之神HOLO"]
-
-	_intel_block(x, y, strip_h, "变质规则", mutation_names[clamp(GameState.current_stage, 0, 3)])
-	x += col_w
-	_intel_block(x, y, strip_h, "关卡进度", "%s · %d/5" % [stage_names[clamp(GameState.current_stage, 0, 3)], GameState.current_node_index + 1])
-	x += col_w
-
-	var defeated := ""
-	for s in range(GameState.current_stage):
-		if s < boss_names.size():
-			if defeated != "": defeated += ", "
-			defeated += boss_names[s]
-	if defeated == "": defeated = "暂无"
-	_intel_block(x, y, strip_h, "已击败", defeated)
-	x += col_w
-
-	# Continue button in last column
-	var cbtn := Button.new()
-	cbtn.text = "继续"
-	cbtn.position = Vector2(x + 20, y + 8); cbtn.size = Vector2(160, 30)
-	cbtn.flat = true
-	var cs := StyleBoxFlat.new(); cs.bg_color = Color(0.102, 0.165, 0.102)
-	cbtn.add_theme_stylebox_override("normal", cs)
-	var chs := StyleBoxFlat.new(); chs.bg_color = Color(0.125, 0.227, 0.125)
-	cbtn.add_theme_stylebox_override("hover", chs)
-	cbtn.add_theme_font_size_override("font_size", 12)
-	cbtn.add_theme_color_override("font_color", Color(0.227, 0.478, 0.227))
-	cbtn.pressed.connect(_on_continue)
-	add_child(cbtn)
-
-func _intel_block(x: float, y: float, h: float, label: String, value: String) -> void:
-	var sep := ColorRect.new()
-	sep.position = Vector2(x, y + 6); sep.size = Vector2(1, h - 12)
-	sep.color = Color(0.086, 0.086, 0.149)
-	add_child(sep)
-
-	var tl := Label.new()
-	tl.text = label
-	tl.position = Vector2(x + 12, y + 4)
-	tl.add_theme_font_size_override("font_size", 9)
-	tl.add_theme_color_override("font_color", Color(0.227, 0.227, 0.314))
-	add_child(tl)
-
-	var vl := Label.new()
-	vl.text = value
-	vl.position = Vector2(x + 12, y + 20)
-	vl.size = Vector2(256, 22)
-	vl.add_theme_font_size_override("font_size", 11)
-	vl.add_theme_color_override("font_color", Color(0.502, 0.502, 0.565))
-	add_child(vl)
-
-# ═══════════════════════════════════════════════
-# SHELF + CARDS
-# ═══════════════════════════════════════════════
-func _draw_shelf() -> void:
-	if _shelf_root and is_instance_valid(_shelf_root):
-		_shelf_root.queue_free()
-	_shelf_root = Control.new()
-	_shelf_root.name = "ShelfRoot"
-	add_child(_shelf_root)
-
-	var items: Array = GameState.shop_items.duplicate()
-	var card_w := 180
-	var card_h := 220
-	var gap := 10
-	var total_w: float = items.size() * card_w + (items.size() - 1) * gap
-	var start_x: float = (1280 - total_w) / 2
-	var y := 110.0
-
-	# Shelf bg
-	var shelf := ColorRect.new()
-	shelf.name = "ShelfBg"
-	shelf.position = Vector2(start_x - 12, y - 6)
-	shelf.size = Vector2(total_w + 24, card_h + 18)
-	shelf.color = Color(0.102, 0.086, 0.055)
-	_shelf_root.add_child(shelf)
-
-	# Shelf top highlight
-	var top_edge := ColorRect.new()
-	top_edge.name = "ShelfTop"
-	top_edge.position = Vector2(shelf.position.x + 8, shelf.position.y)
-	top_edge.size = Vector2(shelf.size.x - 16, 1)
-	top_edge.color = Color(1, 1, 1, 0.04)
-	_shelf_root.add_child(top_edge)
-
-	for i in range(items.size()):
-		var item = items[i]
-		var cx := start_x + i * (card_w + gap)
-		_draw_item_card(_shelf_root, cx, y, card_w, card_h, item)
-
-	# Refresh
-	var refresh_cost: int = _get_refresh_cost()
-	var rbtn := Button.new()
-	rbtn.text = "刷新货架 · %d点" % refresh_cost
-	rbtn.position = Vector2((1280 - 160) / 2, y + card_h + 16)
-	rbtn.size = Vector2(160, 28); rbtn.flat = true
-	var rs := StyleBoxFlat.new(); rs.bg_color = Color(0.102, 0.102, 0.18)
-	rbtn.add_theme_stylebox_override("normal", rs)
-	rbtn.add_theme_font_size_override("font_size", 11)
-	rbtn.add_theme_color_override("font_color", Color(0.345, 0.345, 0.376))
-	rbtn.pressed.connect(_on_refresh)
-	_shelf_root.add_child(rbtn)
-
-func _draw_item_card(parent: Control, cx: float, cy: float, w: int, h: int, item) -> void:
-	var bg := ColorRect.new()
-	bg.name = "Card_%s" % item.item_id
-	bg.position = Vector2(cx, cy); bg.size = Vector2(w, h)
-	bg.color = Color(0.071, 0.071, 0.149)
-	bg.mouse_filter = Control.MOUSE_FILTER_STOP
-
-	var top_stripe := ColorRect.new()
-	top_stripe.position = Vector2(0, 0); top_stripe.size = Vector2(w, 4)
-	top_stripe.color = item.get_rarity_color()
-	bg.add_child(top_stripe)
-
-	var icon := Label.new()
-	icon.text = _card_icon(item.item_id)
-	icon.position = Vector2(0, 20); icon.size = Vector2(w, 80)
-	icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	icon.add_theme_font_size_override("font_size", 36)
-	icon.add_theme_color_override("font_color", Color(1, 1, 1, 0.08))
-	bg.add_child(icon)
-
-	var name := Label.new()
-	name.text = item.item_name
-	name.position = Vector2(4, 104); name.size = Vector2(w - 8, 22)
-	name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name.add_theme_font_size_override("font_size", 12)
-	name.add_theme_color_override("font_color", Color(0.753, 0.753, 0.816))
-	bg.add_child(name)
-
-	var rarity_tag := Label.new()
-	rarity_tag.text = item.get_rarity_name()
-	rarity_tag.position = Vector2(w - 48, 8); rarity_tag.size = Vector2(42, 16)
-	rarity_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	rarity_tag.add_theme_font_size_override("font_size", 8)
-	rarity_tag.add_theme_color_override("font_color", item.get_rarity_color())
-	bg.add_child(rarity_tag)
-
-	var desc := Label.new()
-	desc.text = item.description
-	desc.position = Vector2(6, 128); desc.size = Vector2(w - 12, 36)
-	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	desc.add_theme_font_size_override("font_size", 9)
-	desc.add_theme_color_override("font_color", Color(0.314, 0.314, 0.376))
-	bg.add_child(desc)
-
-	var price := Label.new()
-	price.text = "%d" % item.price
-	price.position = Vector2(0, 168); price.size = Vector2(w, 30)
-	price.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	price.add_theme_font_size_override("font_size", 18)
-	price.add_theme_color_override("font_color", Color(0.835, 0.647, 0.208))
-	bg.add_child(price)
-
-	var item_ref: Resource = item
-	bg.gui_input.connect(func(ev: InputEvent):
-		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-			_on_buy(item_ref)
-	)
-	parent.add_child(bg)
-
-func _card_icon(item_id: String) -> String:
-	match item_id:
-		"reroll_stone": return "🎲"
-		"freeze_die": return "📌"
-		"split_die": return "✂️"
-		"full_reroll": return "🔀"
-		"clone_die": return "📋"
-		"flip_die": return "🔄"
-		"see_dark": return "👁"
-		"heat_vision": return "🔭"
-		"emergency_restart": return "⚖️"
-		"silent_turn": return "🔇"
-		"fate_die": return "✨"
-		"extra_die": return "➕"
-		"purge_chip": return "💊"
-		"gambler_hunch": return "🎯"
-		"payout": return "💰"
-		"rig_dice": return "🎭"
-		"sabotage": return "⚡"
-	return "📦"
-
-# ═══════════════════════════════════════════════
-# INVENTORY HOOKS
-# ═══════════════════════════════════════════════
-func _draw_inv_hooks() -> void:
-	var y := 454.0
-	var held: Array[String] = GameState.consumable_items.duplicate()
-
-	var tag := Label.new()
-	tag.name = "InvTag"
-	tag.text = "道具栏"
-	tag.position = Vector2(30, y + 2)
-	tag.add_theme_font_size_override("font_size", 9)
-	tag.add_theme_color_override("font_color", Color(0.227, 0.227, 0.314))
-	add_child(tag)
-
-	if held.size() == 0:
-		var empty := Label.new()
-		empty.name = "InvEmpty"
-		empty.text = "空空如也"
-		empty.position = Vector2(90, y + 2)
-		empty.add_theme_font_size_override("font_size", 9)
-		empty.add_theme_color_override("font_color", Color(0.18, 0.18, 0.24))
-		add_child(empty)
-		return
-
-	var start_x := 90
-	for i in range(held.size()):
-		var sx := start_x + i * 130
-		var bg := ColorRect.new()
-		bg.name = "Held_%d" % i
-		bg.position = Vector2(sx, y)
-		bg.size = Vector2(120, 22)
-		bg.color = Color(0.047, 0.055, 0.079)
-		add_child(bg)
-
-		var nl := Label.new()
-		nl.name = "Held_lbl%d" % i
-		var info: ItemData = GameState.get_item_info(held[i])
-		var nm: String = held[i]
-		if info: nm = info.item_name
-		nl.text = nm
-		nl.position = bg.position; nl.size = bg.size
-		nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		nl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		nl.add_theme_font_size_override("font_size", 9)
-		nl.add_theme_color_override("font_color", Color(0.227, 0.416, 0.604))
-		add_child(nl)
-
-# ═══════════════════════════════════════════════
-# BUY / REFRESH / CONTINUE
-# ═══════════════════════════════════════════════
-func _on_buy(item: Resource) -> void:
-	if GameState.gold < item.price:
-		_show_warning("点数不足!")
-		return
-	if GameState.consumable_items.size() >= GameState.MAX_CONSUMABLE:
-		_show_discard_swapper(item.item_id, item)
-		return
-	GameState.spend_gold(item.price)
-	GameState.add_consumable_item(item.item_id)
-	_remove_from_shop(item)
-	_refresh_gold()
-	_update_inv_hooks()
-	_update_shelf()
-
-func _remove_from_shop(item: Resource) -> void:
-	var i: int = 0
-	while i < GameState.shop_items.size():
-		if GameState.shop_items[i] == item or GameState.shop_items[i].item_id == item.item_id:
-			GameState.shop_items.remove_at(i)
+func _draw_stock()->void:
+	for child in _content.get_children():child.queue_free()
+	var stock:=_pack_stock if _page=="packs" else _single_stock
+	for i in range(stock.size()):
+		var item:Dictionary=stock[i];var panel:=PanelContainer.new();panel.custom_minimum_size=Vector2(380,185);_content.add_child(panel)
+		var box:=VBoxContainer.new();box.add_theme_constant_override("separation",8);panel.add_child(box)
+		var name:=_label(str(item.name),21,Color(0.93,0.8,0.47));name.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;box.add_child(name)
+		if item.kind=="pack":box.add_child(_label("内含%d张牌 · 允许重复"%item.cards.size(),15,Color(0.74,0.75,0.77)))
 		else:
-			i += 1
+			var card:=PlayerCardRef.get_by_id(str(item.card_id));var desc:=_label(card.description,14,card.get_rarity_color());desc.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;desc.custom_minimum_size=Vector2(340,60);box.add_child(desc)
+		var price:=_effective_price(int(item.price));var buy:=Button.new();buy.text="已售罄" if bool(item.sold) else "购买 · %d金币"%price;buy.disabled=bool(item.sold) or GameState.gold<price;buy.custom_minimum_size=Vector2(340,44);buy.pressed.connect(_buy.bind(i));box.add_child(buy)
+	var refresh:Button=get_node("RefreshButton");var refresh_price:=0 if _free_refresh_available else _refresh_cost();refresh.text="刷新本页 · %d金币"%refresh_price;refresh.disabled=GameState.gold<refresh_price
 
-func _show_discard_swapper(new_id: String, item: Resource) -> void:
-	var held: Array[String] = GameState.consumable_items.duplicate()
-	var layer := CanvasLayer.new()
-	layer.name = "DiscardPopup"
-	layer.layer = 100
-	add_child(layer)
+func _buy(index:int)->void:
+	var stock:=_pack_stock if _page=="packs" else _single_stock
+	if index<0 or index>=stock.size():return
+	var item:Dictionary=stock[index]
+	if bool(item.sold) or not GameState.spend_gold(_effective_price(int(item.price))):return
+	item.sold=true;stock[index]=item
+	if item.kind=="pack":
+		_status.text="打开%s：%s"%[item.name,", ".join(_names_for_ids(item.cards))]
+		for id in item.cards:await _acquire_card(str(id))
+	else:await _acquire_card(str(item.card_id));_status.text="获得单卡【%s】"%item.name
+	_gold_label.text="金币：%d"%GameState.gold;_draw_stock();GameState.save_run()
 
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.7)
-	dim.anchor_right = 1.0; dim.anchor_bottom = 1.0
-	dim.gui_input.connect(func(ev: InputEvent): pass)
-	layer.add_child(dim)
+func _acquire_card(id:String)->void:
+	if GameState.add_player_card(id):return
+	var resolved:=[false]
+	var layer:=CanvasLayer.new();layer.layer=300;add_child(layer);var dim:=ColorRect.new();dim.color=Color(0,0,0,0.94);dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);layer.add_child(dim)
+	var title:=_label("牌库已满：选择一张替换为【%s】"%PlayerCardRef.get_by_id(id).card_name,24,Color(1,0.73,0.25));title.position=Vector2(180,65);title.size=Vector2(920,45);title.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;dim.add_child(title)
+	var scroll:=ScrollContainer.new();scroll.position=Vector2(120,130);scroll.size=Vector2(1040,430);dim.add_child(scroll);var grid:=GridContainer.new();grid.columns=5;scroll.add_child(grid)
+	for i in range(GameState.player_deck.size()):
+		var old:=PlayerCardRef.get_by_id(GameState.player_deck[i]);var b:=Button.new();b.text="%s\n%s"%[old.card_name,old.get_rarity_name()];b.custom_minimum_size=Vector2(190,80);b.pressed.connect(func(index:int=i):GameState.player_deck[index]=id;layer.queue_free();resolved[0]=true);grid.add_child(b)
+	var discard:=Button.new();discard.text="丢弃新卡";discard.position=Vector2(510,595);discard.size=Vector2(260,50);discard.pressed.connect(func():layer.queue_free();resolved[0]=true);dim.add_child(discard)
+	while not resolved[0]:await get_tree().process_frame
 
-	var panel := ColorRect.new()
-	panel.position = Vector2(200, 160); panel.size = Vector2(880, 360)
-	panel.color = Color(0.04, 0.04, 0.08)
-	layer.add_child(panel)
-
-	var title := Label.new()
-	title.text = "道具栏已满，选择替换"
-	title.position = Vector2(0, 8); title.size = Vector2(880, 28)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 14)
-	title.add_theme_color_override("font_color", Color(0.88, 0.44, 0.63))
-	panel.add_child(title)
-
-	for i in range(held.size()):
-		var info: ItemData = GameState.get_item_info(held[i])
-		var btn := Button.new()
-		btn.text = (info.item_name if info else held[i]) + " → 换成 " + item.item_name
-		btn.position = Vector2(60, 50 + i * 36); btn.size = Vector2(760, 30)
-		btn.flat = true
-		var bs := StyleBoxFlat.new(); bs.bg_color = Color(0.08, 0.08, 0.14)
-		btn.add_theme_stylebox_override("normal", bs)
-		btn.add_theme_font_size_override("font_size", 11)
-		btn.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-		var item_id: String = item.item_id
-		var item_ref: Resource = item
-		var price: int = item.price
-		var idx: int = i
-		btn.pressed.connect(func():
-			if GameState.gold < price:
-				layer.queue_free()
-				_show_warning("点数不足!")
-				return
-			GameState.spend_gold(price)
-			GameState.force_swap_consumable(new_id, idx)
-			_remove_from_shop(item_ref)
-			layer.queue_free()
-			_refresh_gold()
-			_update_inv_hooks()
-			_update_shelf()
-		)
-		panel.add_child(btn)
-
-	var cancel := Button.new()
-	cancel.text = "放弃购买"
-	cancel.position = Vector2(360, 320); cancel.size = Vector2(160, 30)
-	cancel.flat = true
-	var cs := StyleBoxFlat.new(); cs.bg_color = Color(0.2, 0.08, 0.08)
-	cancel.add_theme_stylebox_override("normal", cs)
-	cancel.add_theme_font_size_override("font_size", 11)
-	cancel.pressed.connect(func():
-		layer.queue_free()
-		_refresh_gold())
-	panel.add_child(cancel)
-
-func _on_refresh() -> void:
-	var cost: int = _get_refresh_cost()
-	if GameState.gold < cost:
-		_show_warning("刷新需要 %d 点!" % cost)
-		return
-	GameState.spend_gold(cost)
-	_refresh_count += 1
-	GameState.refresh_shop(6)
-	_refresh_gold()
-	_update_shelf()
-
-func _get_refresh_cost() -> int:
-	var costs: Array[int] = [3, 6, 10, 15, 20]
-	return costs[_refresh_count] if _refresh_count < costs.size() else 25 + (_refresh_count - costs.size()) * 5
-
-func _open_gamble_table() -> void:
-	if _gamble_plays >= 2:
-		_show_warning("本商店的两次机会已经用完")
-		return
-	var cost: int = 5 if _gamble_plays == 0 else 15
-	if GameState.gold < cost:
-		_show_warning("需要先投入%d金币" % cost)
-		return
-	var layer := CanvasLayer.new()
-	layer.name = "GambleOverlay"; layer.layer = 120; add_child(layer)
-	var dim := ColorRect.new(); dim.color = Color(0, 0, 0, 0.82); dim.position = Vector2.ZERO; dim.size = Vector2(1280, 720); layer.add_child(dim)
-	var panel := ColorRect.new(); panel.name = "Panel"; panel.position = Vector2(365, 160); panel.size = Vector2(550, 390); panel.color = Color(0.055, 0.045, 0.075); layer.add_child(panel)
-	var title := Label.new(); title.text = "投入 %d 金币 · 选择玩法" % cost; title.position = Vector2(0, 28); title.size = Vector2(550, 40); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 22); panel.add_child(title)
-	_make_gamble_button(panel, "猜大小 · 猜中返还125%", Vector2(75, 105), func(): _show_gamble_guesses(layer, false, cost))
-	_make_gamble_button(panel, "猜点数 · 猜中返还150%", Vector2(285, 105), func(): _show_gamble_guesses(layer, true, cost))
-	_make_gamble_button(panel, "取消", Vector2(180, 300), func(): layer.queue_free())
-
-func _show_gamble_guesses(layer: CanvasLayer, exact: bool, cost: int) -> void:
-	var panel: ColorRect = layer.get_node("Panel")
-	for child in panel.get_children(): child.queue_free()
-	var title := Label.new(); title.text = "选择你的答案"; title.position = Vector2(0, 28); title.size = Vector2(550, 40); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; title.add_theme_font_size_override("font_size", 22); panel.add_child(title)
-	if exact:
-		for value in range(1, 7):
-			var guessed_value: int = value
-			_make_gamble_button(panel, str(value), Vector2(55 + ((value - 1) % 3) * 165, 100 + ((value - 1) / 3) * 80), func(): _resolve_gamble(layer, cost, guessed_value, true))
+func _refresh_page()->void:
+	var cost:=0 if _free_refresh_available else _refresh_cost();if not GameState.spend_gold(cost):return
+	_free_refresh_available=false
+	_refresh_counts[_page]=int(_refresh_counts[_page])+1
+	if _page=="packs":_generate_pack_stock()
 	else:
-		_make_gamble_button(panel, "小 ①②③", Vector2(75, 130), func(): _resolve_gamble(layer, cost, 0, false))
-		_make_gamble_button(panel, "大 ④⑤⑥", Vector2(285, 130), func(): _resolve_gamble(layer, cost, 1, false))
+		_generate_single_stock()
+	_gold_label.text="金币：%d"%GameState.gold;_draw_stock()
 
-func _resolve_gamble(layer: CanvasLayer, cost: int, guess: int, exact: bool) -> void:
-	if GameState.gold < cost:
-		layer.queue_free(); _show_warning("金币不足"); return
-	GameState.spend_gold(cost)
-	_gamble_plays += 1
-	var rolled: int = randi_range(1, 6)
-	var won: bool = rolled == guess if exact else ((rolled <= 3 and guess == 0) or (rolled >= 4 and guess == 1))
-	var returned: int = ceili(cost * (1.5 if exact else 1.25)) if won else 0
-	if returned > 0: GameState.add_gold(returned)
-	layer.queue_free()
-	_refresh_gold()
-	var gamble_btn: Button = find_child("GambleBtn", true, false) as Button
-	if gamble_btn: gamble_btn.text = "店内赌桌（%d/2）" % _gamble_plays
-	_show_warning("掷出%d：%s" % [rolled, "返还%d金币" % returned if won else "投入归木盒所有"])
+func _refresh_cost()->int:
+	var n:=int(_refresh_counts[_page]);return [5,10,15,20][n] if n<4 else 20+(n-3)*5
 
-func _make_gamble_button(parent: Control, text_value: String, pos: Vector2, callback: Callable) -> Button:
-	var button := Button.new(); button.text = text_value; button.position = pos; button.size = Vector2(190, 52); button.pressed.connect(callback); parent.add_child(button); return button
+func _effective_price(base:int)->int:
+	var multiplier:=1.2 if "greedy_box" in GameState.active_forbidden_rules else 1.0
+	multiplier+=float(GameState.next_battle_modifiers.get("shop_price_bonus",0))/100.0
+	return ceili(base*multiplier)
 
-func _on_continue() -> void:
-	EventBus.shop_exited.emit()
-	queue_free()
+func _open_gamble()->void:
+	if _gamble_plays>=2:_status.text="本商店已经玩过两次。";return
+	var cost:=5 if _gamble_plays==0 else 10
+	if GameState.gold<cost:_status.text="金币不足。";return
+	GameState.spend_gold(cost);_gamble_plays+=1
+	var layer:=CanvasLayer.new();layer.layer=250;add_child(layer);var dim:=ColorRect.new();dim.color=Color(0,0,0,0.9);dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);layer.add_child(dim)
+	var text:=_label("投入%d金币：选择玩法"%cost,26,Color(0.94,0.76,0.3));text.position=Vector2(390,180);text.size=Vector2(500,50);text.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;dim.add_child(text)
+	var big:=Button.new();big.text="猜大（④⑤⑥）· 返还125%";big.position=Vector2(300,300);big.size=Vector2(300,60);big.pressed.connect(_resolve_gamble.bind(layer,cost,"big",0));dim.add_child(big)
+	var small:=Button.new();small.text="猜小（①②③）· 返还125%";small.position=Vector2(680,300);small.size=Vector2(300,60);small.pressed.connect(_resolve_gamble.bind(layer,cost,"small",0));dim.add_child(small)
+	for face in range(1,7):var b:=Button.new();b.text=str(face);b.position=Vector2(330+(face-1)*105,410);b.size=Vector2(82,54);b.pressed.connect(_resolve_gamble.bind(layer,cost,"exact",face));dim.add_child(b)
 
-# ═══════════════════════════════════════════════
-# UPDATE HELPERS
-# ═══════════════════════════════════════════════
-func _refresh_gold() -> void:
-	for child in get_children():
-		if child is Label and "GoldLbl" in str(child.name):
-			child.text = "%d" % GameState.gold
+func _resolve_gamble(layer:CanvasLayer,cost:int,mode:String,guess:int)->void:
+	var value:=randi_range(1,6);var won:=(mode=="big" and value>=4) or (mode=="small" and value<=3) or (mode=="exact" and value==guess)
+	var payout:=ceili(cost*(1.5 if mode=="exact" else 1.25)) if won else 0
+	if payout>0:GameState.add_gold(payout)
+	_status.text="骰出%d：%s"%[value,"赢得%d金币"%payout if won else "投入未返还"]
+	layer.queue_free();_gold_label.text="金币：%d"%GameState.gold;_draw_stock();GameState.save_run()
 
-func _show_warning(text: String) -> void:
-	var warn := Label.new()
-	warn.text = text
-	warn.position = Vector2(500, 4)
-	warn.size = Vector2(280, 24)
-	warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	warn.add_theme_font_size_override("font_size", 12)
-	warn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
-	add_child(warn)
-	var tw: Tween = create_tween()
-	tw.tween_property(warn, "modulate:a", 0.0, 1.5)
-	tw.tween_callback(warn.queue_free)
-
-func _update_shelf() -> void:
-	for child in get_children():
-		var n: String = child.name
-		if n.begins_with("Card_") or n.begins_with("Shelf"):
-			child.queue_free()
-	_draw_shelf()
-
-func _update_inv_hooks() -> void:
-	for child in get_children():
-		var n: String = child.name
-		if n.begins_with("Held_") or n == "InvTag" or n == "InvEmpty":
-			child.queue_free()
-	_draw_inv_hooks()
+func _leave()->void:GameState.save_run();EventBus.shop_exited.emit();queue_free()
+func _names_for_ids(ids:Array)->Array[String]:
+	var result:Array[String]=[]
+	for id in ids:
+		result.append(PlayerCardRef.get_by_id(str(id)).card_name)
+	return result
+func _label(text:String,size_value:int,color:Color)->Label:var l:=Label.new();l.text=text;l.add_theme_font_size_override("font_size",size_value);l.add_theme_color_override("font_color",color);return l

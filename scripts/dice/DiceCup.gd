@@ -1,189 +1,141 @@
-## Manages a set of dice — rolling, counting, and result reporting.
 class_name DiceCup
 extends RefCounted
 
-var dice: Array = []
+var dice: Array[Dictionary] = []
 var dice_count: int = 5
-var wild_disabled: bool = false  # 阶段3+: ①不再是万能
+var rng := RandomNumberGenerator.new()
 
-func _init(count: int = 5) -> void:
-	dice_count = count
-	_create_dice()
+func _init(count: int = 5, seed_value: int = 0) -> void:
+	dice_count = maxi(1, count)
+	if seed_value > 0:
+		rng.seed = seed_value
+	else:
+		rng.randomize()
+	for _i in range(dice_count):
+		dice.append(_new_die())
 
-func _create_dice() -> void:
-	dice.clear()
-	for i: int in range(dice_count):
-		dice.append(preload("res://scripts/dice/DiceDie.gd").new())
+func _new_die(value: int = 0) -> Dictionary:
+	return {"value": rng.randi_range(1, 6) if value <= 0 else clampi(value, 1, 6), "locked":false, "lock_rounds":0, "hidden":false, "protected":false, "modified":0,"wild":false,"player_blocked":false}
+
+func roll_new_round() -> void:
+	for die in dice:
+		if int(die.get("lock_rounds", 0)) > 0:
+			die.lock_rounds = int(die.lock_rounds) - 1
+			die.locked = int(die.lock_rounds) > 0
+		else:
+			die.value = rng.randi_range(1, 6)
+			die.locked = false
+		die.hidden = false
+		die.wild = false
+		die.modified = 0
 
 func roll_all() -> void:
 	for die in dice:
-		if not die.locked:
-			die.roll()
+		if not bool(die.locked):
+			die.value = rng.randi_range(1, 6)
 
-## Roll for a new round. A frozen die skips exactly this roll, then unlocks.
-func roll_new_round() -> void:
+func get_values() -> Array[int]:
+	var result: Array[int] = []
 	for die in dice:
-		if die.locked:
-			die.locked = false
-		else:
-			die.roll()
+		result.append(0 if bool(die.hidden) else int(die.value))
+	return result
 
-## Make all dice visible (cancel any hidden/dark dice)
-func set_all_visible() -> void:
+func get_all_values() -> Array[int]:
+	var result: Array[int] = []
 	for die in dice:
-		die.is_hidden = false
-		die.is_dark = false
+		result.append(int(die.value))
+	return result
 
-## Reroll only dice at specific indices
+func reroll_die(index: int, take_lower: bool = false) -> bool:
+	if not _valid(index) or bool(dice[index].locked): return false
+	var value := rng.randi_range(1, 6)
+	if take_lower: value = mini(value, rng.randi_range(1, 6))
+	dice[index].value = value
+	dice[index].modified = int(dice[index].modified) + 1
+	return true
+
 func roll_indices(indices: Array[int]) -> void:
-	for idx in indices:
-		if idx >= 0 and idx < dice.size():
-			dice[idx].roll()
+	for index in indices: reroll_die(index)
 
-## Hide up to [count] distinct dice.
+func flip_at(index: int) -> bool:
+	if not _valid(index): return false
+	dice[index].value = 7 - int(dice[index].value)
+	dice[index].modified = int(dice[index].modified) + 1
+	return true
+
+func adjust_at(index: int, delta: int) -> bool:
+	if not _valid(index): return false
+	var old := int(dice[index].value)
+	dice[index].value = clampi(old + delta, 1, 6)
+	dice[index].modified = int(dice[index].modified) + 1
+	return int(dice[index].value) != old
+
+func set_value(index: int, value: int) -> bool:
+	if not _valid(index): return false
+	dice[index].value = clampi(value, 1, 6)
+	dice[index].modified = int(dice[index].modified) + 1
+	return true
+
+func lock_die(index: int, rounds: int = 1) -> bool:
+	if not _valid(index): return false
+	dice[index].locked = true
+	dice[index].lock_rounds = maxi(1, rounds)
+	return true
+
+func add_die(value: int = 0) -> int:
+	dice.append(_new_die(value))
+	dice_count = dice.size()
+	return dice.size() - 1
+
+func clone_at(index: int) -> bool:
+	if not _valid(index): return false
+	add_die(int(dice[index].value))
+	return true
+
+func split_at(index: int) -> bool:
+	if not _valid(index) or int(dice[index].value) < 4: return false
+	var total := int(dice[index].value)
+	var first := rng.randi_range(1, total - 1)
+	if first > 6 or total - first > 6: return false
+	dice[index].value = first
+	add_die(total - first)
+	return true
+
+func remove_indices(indices: Array[int]) -> Array[Dictionary]:
+	var sorted := indices.duplicate(); sorted.sort(); sorted.reverse()
+	var removed: Array[Dictionary] = []
+	for index in sorted:
+		if _valid(index): removed.push_front(dice.pop_at(index))
+	dice_count = dice.size()
+	return removed
+
+func protect(index: int) -> bool:
+	if not _valid(index): return false
+	dice[index].protected = true
+	return true
+
+func consume_protection(index: int) -> bool:
+	if not _valid(index) or not bool(dice[index].protected): return false
+	dice[index].protected = false
+	return true
+
+func _valid(index: int) -> bool:
+	return index >= 0 and index < dice.size()
+
+# Legacy helpers kept for old save/test compatibility.
+func reveal_all() -> Array: return get_all_values()
+func set_all_visible() -> void:
+	for die in dice: die.hidden = false
+func has_value(value: int) -> bool: return value in get_all_values()
+func get_hidden_count() -> int:
+	var n := 0
+	for die in dice:
+		if bool(die.hidden): n += 1
+	return n
 func hide_random_dice(count: int) -> void:
 	var indices: Array[int] = []
-	for i in range(dice.size()):
-		if not dice[i].is_hidden:
-			indices.append(i)
+	for i in range(dice.size()): indices.append(i)
 	indices.shuffle()
-	for i in range(mini(count, indices.size())):
-		dice[indices[i]].is_hidden = true
-
-## Flip a die at index (1↔6, 2↔5, 3↔4)
-func flip_at(idx: int) -> void:
-	if idx >= 0 and idx < dice.size():
-		dice[idx].value = 7 - dice[idx].value
-
-## Add an extra die with given value (for 锈铁战士 意志依存 skill)
-func add_die_with_value(v: int) -> void:
-	var new_die := preload("res://scripts/dice/DiceDie.gd").new()
-	new_die.value = v
-	dice.append(new_die)
-	dice_count += 1
-
-func set_hidden_die(index: int, hidden: bool) -> void:
-	if index >= 0 and index < dice.size():
-		dice[index].is_hidden = hidden
-
-func get_values() -> Array:
-	var result: Array = []
-	for die in dice:
-		if not die.is_hidden:
-			result.append(die.value)
-		else:
-			result.append(-1)
-	return result
-
-## Get all values including hidden — for boss who can see dark dice
-func get_all_values() -> Array:
-	var result: Array = []
-	for die in dice:
-		result.append(die.value)
-	return result
-
-func count_matches(target: int) -> int:
-	var count: int = 0
-	for die in dice:
-		if die.matches(target):
-			count += 1
-	return count
-
-func count_matches_revealing(target: int, six_wild: bool = false) -> int:
-	var count: int = 0
-	for die in dice:
-		if die.value == target: count += 1
-		elif die.value == 1 and not wild_disabled: count += 1
-		elif die.value == 6 and six_wild: count += 1
-	return count
-
-func reveal_all() -> Array:
-	var revealed: Array = []
-	for die in dice:
-		if die.is_hidden:
-			revealed.append(die.value)
-		die.is_hidden = false
-	return revealed
-
-func has_value(val: int) -> bool:
-	for die in dice:
-		if not die.is_hidden and die.value == val:
-			return true
-	return false
-
-func get_hidden_count() -> int:
-	var count: int = 0
-	for die in dice:
-		if die.is_hidden:
-			count += 1
-	return count
-
-func reroll_die(index: int) -> void:
-	if index >= 0 and index < dice.size():
-		dice[index].roll()
-
-## Add one die (split_die item effect)
-func add_hidden_die() -> void:
-	var new_die = preload("res://scripts/dice/DiceDie.gd").new()
-	new_die.roll()
-	new_die.is_hidden = true
-	dice.append(new_die)
-	dice_count += 1
-
-func add_die() -> void:
-	var new_die = preload("res://scripts/dice/DiceDie.gd").new()
-	new_die.roll()
-	dice.append(new_die)
-	dice_count += 1
-
-## Clone die at index — add one extra die with same value (must have pair)
-func clone_at(idx: int) -> void:
-	if idx < 0 or idx >= dice.size(): return
-	var val: int = dice[idx].value
-	var d = preload("res://scripts/dice/DiceDie.gd").new()
-	d.value = val
-	dice.append(d)
-	dice_count += 1
-
-## Get indices of dice that have at least one other die with same value
-func get_pair_indices() -> Array[int]:
-	var value_counts: Dictionary = {}
-	for i in range(dice.size()):
-		if dice[i].is_hidden: continue  # 隐藏骰不参与
-		var v: int = dice[i].value
-		if not value_counts.has(v):
-			value_counts[v] = []
-		value_counts[v].append(i)
-	var result: Array[int] = []
-	for v in value_counts:
-		var indices: Array = value_counts[v]
-		if indices.size() >= 2:
-			for idx in indices:
-				result.append(idx as int)
-	return result
-
-## Check if cup has any pair (2+ dice with same value)
-func has_pairs() -> bool:
-	return get_pair_indices().size() > 0
-
-## Split die at index into 2 smaller dice summing to its value (only >=4)
-func split_at(idx: int) -> void:
-	if idx < 0 or idx >= dice.size(): return
-	var val: int = dice[idx].value
-	if val < 4: return
-	dice.remove_at(idx)
-	dice_count -= 1
-	# Pairs that sum to val
-	var pairs: Dictionary = {4: [[1, 3], [2, 2]], 5: [[1, 4], [2, 3]], 6: [[1, 5], [2, 4], [3, 3]]}
-	var options: Array = pairs.get(val, [[1, 1]])
-	var pick: Array = options[randi() % options.size()]
-	for v in pick:
-		var d = preload("res://scripts/dice/DiceDie.gd").new()
-		d.value = v
-		dice.append(d)
-		dice_count += 1
-
-## Lock die at index so roll_all skips it (freeze_die/fate_die item)
-func lock_die(idx: int) -> void:
-	if idx >= 0 and idx < dice.size():
-		dice[idx].locked = true
+	for i in range(mini(count, indices.size())): dice[indices[i]].hidden = true
+func add_die_with_value(value: int) -> void: add_die(value)
+func enforce_roll_constraints(_mutable_indices: Array[int] = []) -> void: pass

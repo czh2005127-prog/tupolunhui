@@ -201,19 +201,28 @@ func _on_settings() -> void:
 func _open_forbidden_rules() -> void:
 	var layer := CanvasLayer.new(); layer.layer = 100; add_child(layer)
 	var dim := ColorRect.new(); dim.color = Color(0, 0, 0, 0.88); dim.position = Vector2.ZERO; dim.size = Vector2(CANVAS_W, CANVAS_H); layer.add_child(dim)
-	var panel := ColorRect.new(); panel.position = Vector2(260, 105); panel.size = Vector2(760, 510); panel.color = Color(0.04, 0.035, 0.065); layer.add_child(panel)
-	var title := _label("禁忌规则", Vector2(0, 22), 28, COL_GOLD); title.size = Vector2(760, 45); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; panel.add_child(title)
+	var panel := ColorRect.new(); panel.position = Vector2(150, 55); panel.size = Vector2(980, 610); panel.color = Color(0.04, 0.035, 0.065); layer.add_child(panel)
+	var title := _label("禁忌规则　最多选择%d条" % GameState.forbidden_slot_limit, Vector2(0, 18), 28, COL_GOLD); title.size = Vector2(980, 45); title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; panel.add_child(title)
 	var definitions: Array[Dictionary] = [
-		{"id":"forbidden_spread", "name":"禁忌蔓延", "desc":"所有层出现禁忌点数 · 金币/XP +20%"},
-		{"id":"high_pressure", "name":"高压开盘", "desc":"最低起叫额外+1 · 金币/XP +15%"},
-		{"id":"short_cup", "name":"缺口骰杯", "desc":"玩家基础骰子减为4颗 · 金币/XP +25%"},
+		{"id":"greedy_box", "name":"贪婪木盒", "desc":"初始金币+20；商店价格+20%"},
+		{"id":"narrow_hand", "name":"狭窄大手", "desc":"每轮补至7张；手牌上限8"},
+		{"id":"rush_clock", "name":"急行时钟", "desc":"每轮第一张牌不推进；新轮敌方倒计时-2"},
+		{"id":"twin_throw", "name":"双生投掷", "desc":"每场+1骰；随机1骰本轮不能修改"},
+		{"id":"overload_circuit", "name":"过载回路", "desc":"第3张普通/稀有牌结算两次；敌方额外推进"},
+		{"id":"broken_cycle", "name":"残缺轮回", "desc":"每轮可保留2张；基础补牌降为5"},
+		{"id":"closed_prophecy", "name":"封闭预言", "desc":"敌方初始倒计时+2；隐藏后续意图"},
+		{"id":"forbidden_face", "name":"禁忌骰面", "desc":"⑥每颗基础点数+2；卡牌不能直接改成⑥"},
 	]
 	for i in range(definitions.size()):
 		var definition: Dictionary = definitions[i]
-		var check := CheckButton.new(); check.text = "%s　%s" % [definition.name, definition.desc]; check.position = Vector2(95, 105 + i * 92); check.size = Vector2(570, 58); check.button_pressed = definition.id in GameState.selected_forbidden_rules
-		check.toggled.connect(func(enabled: bool, rule_id: String = definition.id):
-			if enabled and rule_id not in GameState.selected_forbidden_rules: GameState.selected_forbidden_rules.append(rule_id)
+		var check := CheckButton.new(); check.text = "%s\n%s" % [definition.name, definition.desc]; check.position = Vector2(55 + (i % 2) * 470, 85 + (i / 2) * 105); check.size = Vector2(420, 78); check.button_pressed = definition.id in GameState.selected_forbidden_rules
+		check.toggled.connect(func(enabled: bool, rule_id: String = definition.id, button: CheckButton = check):
+			if enabled and rule_id not in GameState.selected_forbidden_rules:
+				if GameState.selected_forbidden_rules.size() >= GameState.forbidden_slot_limit:
+					button.set_pressed_no_signal(false)
+					return
+				GameState.selected_forbidden_rules.append(rule_id)
 			elif not enabled: GameState.selected_forbidden_rules.erase(rule_id)
 			GameState.save_progress())
 		panel.add_child(check)
-	var close := Button.new(); close.text = "确认"; close.position = Vector2(280, 425); close.size = Vector2(200, 44); close.pressed.connect(func(): layer.queue_free(); _build()); panel.add_child(close)
+	var close := Button.new(); close.text = "确认"; close.position = Vector2(390, 535); close.size = Vector2(200, 48); close.pressed.connect(func(): layer.queue_free(); _build()); panel.add_child(close)

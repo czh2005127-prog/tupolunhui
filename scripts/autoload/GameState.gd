@@ -1,940 +1,229 @@
-## Central game state for the current run.
-## Holds assimilation status, gold, items, rust points, and run progression.
 extends Node
 
-const ItemData := preload("res://scripts/resources/ItemData.gd")
-const CardData := preload("res://scripts/resources/CardData.gd")
-const BossFragmentData := preload("res://scripts/resources/BossFragmentData.gd")
-
-# Player state
-var gold: int = 0
-var assimilation_count: int = 0
-const MAX_ASSIMILATION: int = 2
+const CardDataRef:=preload("res://scripts/resources/CardData.gd")
+const PlayerCardRef:=preload("res://scripts/resources/PlayerCardData.gd")
+const BossFragmentRef:=preload("res://scripts/resources/BossFragmentData.gd")
+const PROGRESS_MARKER:="SCORE_PROGRESS_V2"
+const RUN_MARKER:="SCORE_RUN_V2"
+const MAX_ASSIMILATION:=2
+const MAX_DECK_SIZE:=25
+const STARTING_GOLD:=45
 
 # Current run
-var current_stage: int = 0
-var current_node_index: int = 0
-var stages_cleared: Array[int] = []
-var boss_fragments: Array[String] = []
-var assimilation_curse: String = ""
-const STAGE_BREAK_TARGETS: Array[int] = [1500, 5000, 15000, 50000]
-var stage_break_scores: Array[int] = [0, 0, 0, 0]
-var current_battle_break_score: int = 0
-var current_break_streak: int = 0
-
-# Run stats
-var total_assimilations: int = 0
-var events_completed: int = 0
-var items_used: int = 0
-var bosses_defeated: Array[String] = []
-var enemies_defeated_this_run: int = 0
-var final_stage_reached: int = 0
-var final_node_reached: int = 0
-
-var has_cleared_game: bool = false
-
-# Debug: quick-jump from main menu to boss fight
-var _debug_jump_boss: bool = false
-var persistent_virus: int = 0  # 跨局累积感染次数
-
-# Items
-var consumable_items: Array[String] = []
-var shop_items: Array = []
-var event_notification: String = ""
-var _temp_bonus_dice: int = 0
-var _seen_events: Array[String] = []
-var next_battle_fixed_six: bool = false
-var next_boss_dice_penalty: int = 0
-var next_boss_start_assimilated: bool = false
-var saved_battle_card_ids: Array[String] = []
-var _battle_entry_snapshot: Dictionary = {}
-var current_battle_seed: int = 0
-var stage_node_orders: Dictionary = {}
-var current_contract: Dictionary = {}
-var prisoner_offer_stages: Array[int] = []
-var prisoner_accepted_stages: Array[int] = []
-var prisoner_breaches: int = 0
-var prisoner_identity_revealed: bool = false
-var royal_fragment_available: bool = false
-
-# ----- Rust Contract system -----
-# Card upgrade levels: { card_id: level (0-3) }
-var card_levels: Dictionary = {}
-# Highest permanently purchased level. Active levels can be freely toggled below it.
-var purchased_card_levels: Dictionary = {}
-# Accumulated rust points
-var rust_points: int = 0
-# Rust points earned this run
-var _run_rust_points: int = 0
-
-# ----- Unlock system -----
-var unlocked_cards: Array[String] = []
-var unlocked_items: Array[String] = []
-
-# ----- XP / Level system -----
-var player_xp: int = 0
-var player_level: int = 1
-var _run_xp: int = 0
-var _pending_xp: int = 0   # XP earned this run, committed on death/victory
-var _new_levels: Array[int] = []
-
-const XP_PER_ENEMY: int = 10
-const XP_PER_BOSS: int = 25
-const XP_FULL_CLEAR: int = 100
-const STARTER_ITEMS: Array[String] = [
-	"reroll_stone", "full_reroll", "flip_die",
-	"see_dark", "emergency_restart", "silent_turn",
-	"purge_chip", "gambler_hunch", "payout",
-	"freeze_die", "clone_die", "heat_vision", "fate_die",
-]
-
-func xp_for_next_level() -> int:
-	return 50 * player_level
-
-func add_xp(amount: int) -> void:
-	var old_level: int = player_level
-	player_xp += amount
-	_run_xp += amount
-	while player_level < 20 and player_xp >= xp_for_next_level():
-		player_xp -= xp_for_next_level()
-		player_level += 1
-		_apply_unlock(player_level)
-		_new_levels.append(player_level)
-	if player_level > old_level:
-		save_progress()
-
-## Get names of items/cards unlocked at given levels, then clear the queue
-func pop_new_unlocks() -> Dictionary:
-	var result: Dictionary = {}
-	for lv in _new_levels:
-		var unlocks: Array[String] = _get_unlocks_for_level(lv)
-		var names: Array[String] = []
-		for id in unlocks:
-			if id.begins_with("item:"):
-				var it := ItemData.get_by_id(id.substr(5))
-				names.append(it.item_name if it else id)
-			else:
-				var c := CardData.get_card_by_id(id)
-				names.append(c.card_name if c else id)
-		if not names.is_empty():
-			result[lv] = names
-	_new_levels.clear()
-	return result
-
-func _apply_unlock(level: int) -> void:
-	var unlocks: Array[String] = _get_unlocks_for_level(level)
-	for id in unlocks:
-		if id.begins_with("item:"):
-			var item_id: String = id.substr(5)
-			if not (item_id in unlocked_items):
-				unlocked_items.append(item_id)
-		elif not (id in unlocked_cards):
-			unlocked_cards.append(id)
-
-func _ensure_starter_items() -> void:
-	for item_id in STARTER_ITEMS:
-		if item_id not in unlocked_items:
-			unlocked_items.append(item_id)
-
-func _get_unlocks_for_level(level: int) -> Array[String]:
-	match level:
-		1: return [
-			"jack_crt", "rust_warrior", "battery_kid",
-			"cyclops_lcd", "two_face", "chamberlain",
-			"table_ghost", "recycler", "lucky_one",
-			"casino_owner", "dealer", "prophet",
-		]
-		2: return ["signal_noise"]
-		3: return ["mirror_tech"]
-		4: return ["referee"]
-		5: return ["alliance_oled"]
-		6: return ["item:split_die"]
-		7: return ["item:extra_die"]
-		8: return ["item:rig_dice"]
-		9: return ["item:sabotage"]
-		10: return ["item:pair_fix"]
-		11: return ["item:borrow_die"]
-		12: return ["item:royal_pardon"]
-	return []
-
-## Commit all XP earned this run (called on death or full clear)
-func commit_pending_xp(bonus: int = 0) -> void:
-	if _pending_xp + bonus > 0:
-		add_xp(_pending_xp + bonus)
-		_pending_xp = 0
-
-func get_gold_bonus() -> int:
-	return 25 if player_level >= 5 else 0
-
-# ----- Tutorial -----
-var tutorial_enabled: bool = true
-var tutorial_completed: bool = false
-var tutorial_shop_seen: bool = false
-var tutorial_seen_topics: Array[String] = []
-var selected_forbidden_rules: Array[String] = []
-var active_forbidden_rules: Array[String] = []
-
-const MAX_CONSUMABLE: int = 6
-
-func get_bonus_dice_count() -> int:
-	var b: int = _temp_bonus_dice
-	_temp_bonus_dice = 0
-	return b
-
-func set_bonus_dice(count: int) -> void:
-	_temp_bonus_dice = count
-
-func adjust_bonus_dice(delta: int) -> void:
-	_temp_bonus_dice += delta
-
-func prisoner_can_appear(stage: int) -> bool:
-	if prisoner_breaches >= 3 or stage in prisoner_offer_stages:
-		return false
-	if stage <= 1:
-		return true
-	return 0 in prisoner_accepted_stages and 1 in prisoner_accepted_stages
-
-func record_prisoner_offer(stage: int) -> void:
-	if stage not in prisoner_offer_stages:
-		prisoner_offer_stages.append(stage)
-
-func record_prisoner_acceptance(stage: int) -> void:
-	if stage not in prisoner_accepted_stages:
-		prisoner_accepted_stages.append(stage)
-
-func prisoner_king_arc_complete() -> bool:
-	return prisoner_breaches < 3 and 0 in prisoner_accepted_stages and 1 in prisoner_accepted_stages
-
-func mark_tutorial_topic(topic_id: String) -> bool:
-	if not tutorial_enabled or topic_id in tutorial_seen_topics:
-		return false
-	tutorial_seen_topics.append(topic_id)
-	save_progress()
-	return true
-
-func add_gold(amount: int) -> void:
-	gold += amount
-	EventBus.gold_changed.emit(gold)
-
-func spend_gold(amount: int) -> bool:
-	if gold >= amount:
-		gold -= amount
-		EventBus.gold_changed.emit(gold)
-		return true
-	return false
-
-func assimilate() -> void:
-	if assimilation_count >= MAX_ASSIMILATION:
-		return
-	if assimilation_count == MAX_ASSIMILATION - 1 and "royal_pardon" in consumable_items:
-		use_consumable("royal_pardon")
-		EventBus.hint_show.emit("国王赦免生效：免除致死同化", 3.0, Color(0.98, 0.78, 0.29))
-		return
-	assimilation_count = mini(assimilation_count + 1, MAX_ASSIMILATION)
-	total_assimilations += 1
-	if assimilation_count == 1:
-		EventBus.half_assimilated.emit()
-	elif assimilation_count >= MAX_ASSIMILATION:
-		EventBus.fully_assimilated.emit()
-
-func force_full_assimilation() -> void:
-	if assimilation_count < MAX_ASSIMILATION:
-		assimilation_count = MAX_ASSIMILATION
-		total_assimilations += 1
-	EventBus.fully_assimilated.emit()
-
-func clear_assimilation() -> void:
-	assimilation_count = 0
-	persistent_virus = 0
-	assimilation_curse = ""
-
-func is_half_assimilated() -> bool:
-	return assimilation_count >= 1
-
-func choose_assimilation_curse(curse_id: String) -> bool:
-	if assimilation_count != 1 or curse_id not in ["double_wild", "growth_cost", "devour_challenge"]:
-		return false
-	assimilation_curse = curse_id
-	return true
-
-func has_boss_fragment(card_id: String) -> bool:
-	return card_id in boss_fragments
-
-## Returns added, duplicate, or full. Full leaves inventory unchanged until UI resolves it.
-func add_boss_fragment(card_id: String) -> String:
-	if not BossFragmentData.has_definition(card_id):
-		return "invalid"
-	if card_id in boss_fragments:
-		return "duplicate"
-	if boss_fragments.size() >= BossFragmentData.MAX_FRAGMENTS:
-		return "full"
-	boss_fragments.append(card_id)
-	_apply_fragment_acquisition_reward(card_id)
-	return "added"
-
-func replace_boss_fragment(old_index: int, new_card_id: String) -> bool:
-	if old_index < 0 or old_index >= boss_fragments.size() or not BossFragmentData.has_definition(new_card_id):
-		return false
-	if new_card_id in boss_fragments:
-		return false
-	boss_fragments[old_index] = new_card_id
-	_apply_fragment_acquisition_reward(new_card_id)
-	return true
-
-func _apply_fragment_acquisition_reward(card_id: String) -> void:
-	pass
-
-func consume_boss_fragment(card_id: String) -> bool:
-	var idx: int = boss_fragments.find(card_id)
-	if idx < 0: return false
-	boss_fragments.remove_at(idx)
-	return true
-
-func get_battle_reward_multiplier(cards: Array) -> float:
-	if cards.is_empty():
-		return 1.0
-	const LEVEL_MULTIPLIERS: Array[float] = [1.0, 1.05, 1.12, 1.22]
-	var bonus_sum: float = 0.0
-	var counted: int = 0
-	for card in cards:
-		if card == null: continue
-		var level: int = clampi(get_card_level(card.card_id), 0, 3)
-		bonus_sum += LEVEL_MULTIPLIERS[level] - 1.0
-		counted += 1
-	var card_multiplier: float = 1.0 + (bonus_sum / float(counted)) if counted > 0 else 1.0
-	return card_multiplier * get_forbidden_reward_multiplier()
-
-func get_forbidden_reward_multiplier() -> float:
-	var bonus: float = 0.0
-	if "forbidden_spread" in active_forbidden_rules: bonus += 0.20
-	if "high_pressure" in active_forbidden_rules: bonus += 0.15
-	if "short_cup" in active_forbidden_rules: bonus += 0.25
-	return 1.0 + bonus
-
-func is_forbidden_rule_active(rule_id: String) -> bool:
-	return rule_id in active_forbidden_rules
-
-func add_consumable_item(item_id: String) -> bool:
-	if consumable_items.size() < MAX_CONSUMABLE:
-		consumable_items.append(item_id)
-		EventBus.item_acquired.emit(item_id)
-		return true
-	EventBus.discard_prompt.emit(item_id)
-	return false
-
-func force_swap_consumable(new_id: String, old_idx: int) -> void:
-	if old_idx >= 0 and old_idx < consumable_items.size():
-		consumable_items[old_idx] = new_id
-		EventBus.item_acquired.emit(new_id)
-
-func use_consumable(item_id: String) -> void:
-	var idx: int = consumable_items.find(item_id)
-	if idx != -1:
-		consumable_items.remove_at(idx)
-		items_used += 1
-		EventBus.item_used.emit(item_id)
-
-func clear_virus() -> void:
-	persistent_virus = 0
-
-func get_item_info(item_id: String) -> ItemData:
-	return ItemData.get_by_id(item_id)
-
-func refresh_shop(count: int = 6) -> void:
-	shop_items = ItemData.get_random_shop_items(count)
-	# Defensive dedup — guarantee no duplicate item_ids in shop
-	var seen: Dictionary = {}
-	var deduped: Array = []
-	for item in shop_items:
-		if item == null or seen.has(item.item_id):
-			continue
-		seen[item.item_id] = true
-		deduped.append(item)
-	shop_items = deduped
-
-## ---- Rust point helpers ----
-func add_rust_points(amount: int) -> void:
-	rust_points += amount
-	_run_rust_points += amount
-
-func get_card_level(card_id: String) -> int:
-	return card_levels.get(card_id, 0)
-
-func upgrade_card(card_id: String) -> bool:
-	var card := CardData.get_card_by_id(card_id)
-	if card == null:
-		return false
-	var max_level: int = get_max_level_for_card(card_id)
-	var active: int = get_card_level(card_id)
-	var purchased: int = int(purchased_card_levels.get(card_id, active))
-	if active < purchased:
-		card_levels[card_id] = active + 1
-		save_progress()
-		return true
-	if purchased >= max_level:
-		return false
-	var cost: int = purchased + 1
-	if rust_points < cost:
-		return false
-	rust_points -= cost
-	purchased += 1
-	purchased_card_levels[card_id] = purchased
-	card_levels[card_id] = purchased
-	save_progress()
-	return true
-
-func downgrade_card(card_id: String) -> bool:
-	var current: int = get_card_level(card_id)
-	if current <= 0:
-		return false
-	card_levels[card_id] = current - 1
-	save_progress()
-	return true
-
-func clear_all_levels() -> int:
-	for cid in card_levels:
-		card_levels[cid] = 0
-	save_progress()
-	return 0
-
-func get_purchased_card_level(card_id: String) -> int:
-	return int(purchased_card_levels.get(card_id, get_card_level(card_id)))
-
-func get_next_card_level_cost(card_id: String) -> int:
-	var card := CardData.get_card_by_id(card_id)
-	if card == null: return 0
-	var purchased: int = get_purchased_card_level(card_id)
-	return 0 if get_card_level(card_id) < purchased else mini(3, purchased + 1)
-
-func get_max_level_for_card(card_id: String) -> int:
-	return _get_max_level(card_id)
-
-func get_upgrade_cost_for_rarity(rarity: int) -> int:
-	return _get_upgrade_cost(rarity)
-
-func _get_upgrade_cost(rarity: int) -> int:
-	match rarity:
-		CardData.Rarity.COMMON: return 1
-		CardData.Rarity.RARE: return 2
-		CardData.Rarity.EPIC: return 3
-		CardData.Rarity.LEGENDARY: return 4
-		CardData.Rarity.GENESIS: return 5
-		CardData.Rarity.UNKNOWN: return 5
-	return 1
-
-## Max levels per card
-func _get_max_level(card_id: String) -> int:
-	var no_upgrade := ["two_face", "mirror_tech", "dealer", "dice_god", "unknown_mirror", "unknown_chaos", "unknown_abyss"]
-	if card_id in no_upgrade:
-		return 0
-	if card_id == "alliance_oled": return 1
-	if card_id in ["table_ghost", "prophet"]: return 2
-	return 3
-
-## Rust points for this run
-func get_run_rust_points() -> int:
-	return _run_rust_points
-
-func get_stage_break_target(stage: int = current_stage) -> int:
-	return STAGE_BREAK_TARGETS[clampi(stage, 0, STAGE_BREAK_TARGETS.size() - 1)]
-
-func get_stage_break_score(stage: int = current_stage) -> int:
-	if stage < 0 or stage >= stage_break_scores.size():
-		return 0
-	return stage_break_scores[stage]
-
-func is_stage_break_qualified(stage: int = current_stage) -> bool:
-	return get_stage_break_score(stage) >= get_stage_break_target(stage)
-
-func get_stage_break_rating(stage: int = current_stage) -> String:
-	var target: int = get_stage_break_target(stage)
-	var score: int = get_stage_break_score(stage)
-	if score >= target * 8: return "规则撕裂"
-	if score >= target * 4: return "极限破局"
-	if score >= target * 2: return "超额突破"
-	if score >= target: return "合格"
-	return "未合格"
-
-func begin_break_score_battle() -> void:
-	current_battle_break_score = 0
-	current_break_streak = 0
-	_emit_break_score_changed(0, "本局开始")
-
-func add_break_score(base_chips: int, tactical_multiplier: int, reason: String) -> int:
-	if base_chips <= 0:
-		return 0
-	current_break_streak = mini(current_break_streak + 1, 8)
-	var gain: int = base_chips * maxi(tactical_multiplier, 1) * current_break_streak
-	var stage: int = clampi(current_stage, 0, stage_break_scores.size() - 1)
-	stage_break_scores[stage] += gain
-	current_battle_break_score += gain
-	_emit_break_score_changed(gain, reason)
-	return gain
-
-func reset_break_score_streak() -> void:
-	if current_break_streak == 0:
-		return
-	current_break_streak = 0
-	_emit_break_score_changed(0, "连续得分中断")
-
-func _emit_break_score_changed(gain: int, reason: String) -> void:
-	EventBus.break_score_changed.emit(
-		get_stage_break_score(), current_battle_break_score, get_stage_break_target(),
-		gain, reason, current_break_streak)
-
-## ---- Setup ----
-func setup_new_run() -> void:
-	gold = 0
-	assimilation_count = 0
-	current_stage = 0
-	current_node_index = 0
-	_run_rust_points = 0
-	_run_xp = 0
-	_pending_xp = 0
-	_new_levels.clear()
-	stages_cleared.clear()
-	stage_break_scores.assign([0, 0, 0, 0])
-	current_battle_break_score = 0
-	current_break_streak = 0
-	bosses_defeated.clear()
-	enemies_defeated_this_run = 0
-	final_stage_reached = 0
-	final_node_reached = 0
-	consumable_items.clear()
-	boss_fragments.clear()
-	assimilation_curse = ""
-	shop_items.clear()
-	_debug_jump_boss = false
-	persistent_virus = 0
-	total_assimilations = 0
-	events_completed = 0
-	items_used = 0
-	_seen_events.clear()
-	_run_rust_points = 0
-	_run_xp = 0
-	_pending_xp = 0
-	_new_levels.clear()
-	_temp_bonus_dice = 0
-	next_battle_fixed_six = false
-	next_boss_dice_penalty = 0
-	next_boss_start_assimilated = false
-	saved_battle_card_ids.clear()
-	_battle_entry_snapshot.clear()
-	current_battle_seed = 0
-	stage_node_orders.clear()
-	current_contract.clear()
-	prisoner_offer_stages.clear()
-	prisoner_accepted_stages.clear()
-	prisoner_breaches = 0
-	prisoner_identity_revealed = false
-	royal_fragment_available = false
+var gold:=0
+var assimilation_count:=0
+var current_stage:=0
+var current_node_index:=0
+var stage_node_orders:Dictionary={}
+var player_deck:Array[String]=[]
+var draw_pile:Array[String]=[]
+var discard_pile:Array[String]=[]
+var exhausted_pile:Array[String]=[]
+var boss_fragments:Array[String]=[]
+var current_battle_seed:=0
+var current_contract:Dictionary={}
+var prisoner_offer_stages:Array[int]=[]
+var prisoner_accepted_stages:Array[int]=[]
+var prisoner_breaches:=0
+var royal_fragment_available:=false
+var boss_rust_awarded_this_run:Array[int]=[]
+var event_ids_seen_this_run:Array[String]=[]
+var next_battle_modifiers:Dictionary={}
+var after_battle_modifiers:Dictionary={}
+var active_forbidden_rules:Array[String]=[]
+var battle_rounds_used:=5
+var bosses_defeated:Array[String]=[]
+var events_completed:=0
+var total_assimilations:=0
+var _battle_entry_snapshot:Dictionary={}
+var _run_rust_points:=0
+
+# Permanent progression
+var has_cleared_game:=false
+var rust_points:=0
+var tech_points:=0
+var card_levels:Dictionary={}
+var purchased_card_levels:Dictionary={}
+var unlocked_cards:Array[String]=[]
+var unlocked_player_cards:Array[String]=[]
+var purchased_tech_nodes:Array[String]=[]
+var selected_forbidden_rules:Array[String]=[]
+var forbidden_slot_limit:=1
+var completed_three_forbidden:=false
+var hidden_king_discovered:=false
+var tutorial_enabled:=true
+var tutorial_completed:=false
+var tutorial_shop_seen:=false
+var tutorial_seen_topics:Array[String]=[]
+
+func _ready()->void:load_progress()
+
+func setup_new_run()->void:
+	gold=STARTING_GOLD+(5 if "prep_gold_1" in purchased_tech_nodes else 0)+(5 if "prep_gold_2" in purchased_tech_nodes else 0)
+	assimilation_count=0;current_stage=0;current_node_index=0;stage_node_orders.clear();boss_fragments.clear();current_battle_seed=0
+	current_contract.clear();prisoner_offer_stages.clear();prisoner_accepted_stages.clear();prisoner_breaches=0;royal_fragment_available=false
+	boss_rust_awarded_this_run.clear();event_ids_seen_this_run.clear();next_battle_modifiers.clear();after_battle_modifiers.clear();next_battle_modifiers.starting_shop_done=false
+	bosses_defeated.clear();events_completed=0;total_assimilations=0;_battle_entry_snapshot.clear();_run_rust_points=0;battle_rounds_used=5
 	active_forbidden_rules.clear()
-	if has_cleared_game:
-		active_forbidden_rules.assign(selected_forbidden_rules)
-	_clear_save()
+	if has_cleared_game:active_forbidden_rules.assign(selected_forbidden_rules)
+	if "greedy_box" in active_forbidden_rules:gold+=20
+	initialize_player_deck();delete_run_save();EventBus.run_started.emit()
 
-## Freeze the run at the moment after opponents are chosen but before battle setup
-## consumes one-shot modifiers. Pausing during the battle always returns here.
-func capture_battle_entry(cards: Array) -> void:
-	if current_battle_seed == 0:
-		current_battle_seed = randi_range(1, 2147483646)
-	saved_battle_card_ids.clear()
+func initialize_player_deck()->void:
+	player_deck.assign(PlayerCardRef.get_starter_deck_ids());draw_pile.clear();discard_pile.clear();exhausted_pile.clear()
+
+func add_player_card(card_id:String)->bool:
+	if PlayerCardRef.get_by_id(card_id)==null or player_deck.size()>=MAX_DECK_SIZE:return false
+	player_deck.append(card_id);return true
+
+func remove_player_card_at(index:int)->bool:
+	if index<0 or index>=player_deck.size():return false
+	player_deck.remove_at(index);return true
+
+func add_gold(amount:int)->void:gold=maxi(0,gold+amount);EventBus.gold_changed.emit(gold)
+func spend_gold(amount:int)->bool:
+	if amount<0 or gold<amount:return false
+	gold-=amount;EventBus.gold_changed.emit(gold);return true
+
+func assimilate()->void:
+	if assimilation_count>=MAX_ASSIMILATION:return
+	assimilation_count+=1;total_assimilations+=1
+	if assimilation_count==1:EventBus.half_assimilated.emit()
+	else:EventBus.fully_assimilated.emit()
+func clear_assimilation()->void:assimilation_count=0
+func is_half_assimilated()->bool:return assimilation_count==1
+
+func add_boss_fragment(card_id:String)->String:
+	if not BossFragmentRef.has_definition(card_id):return "invalid"
+	if card_id in boss_fragments:return "duplicate"
+	if boss_fragments.size()>=BossFragmentRef.MAX_FRAGMENTS:return "full"
+	boss_fragments.append(card_id);return "added"
+func replace_boss_fragment(index:int,new_id:String)->bool:
+	if index<0 or index>=boss_fragments.size() or new_id in boss_fragments or not BossFragmentRef.has_definition(new_id):return false
+	boss_fragments[index]=new_id;return true
+func consume_boss_fragment(card_id:String)->bool:
+	var index:=boss_fragments.find(card_id)
+	if index<0:return false
+	boss_fragments.remove_at(index);return true
+
+func prisoner_can_appear(stage:int)->bool:
+	if prisoner_breaches>2 or stage in prisoner_offer_stages:return false
+	if stage<=1:return true
+	return 0 in prisoner_accepted_stages and 1 in prisoner_accepted_stages
+func record_prisoner_offer(stage:int)->void:
+	if stage not in prisoner_offer_stages:prisoner_offer_stages.append(stage)
+func record_prisoner_acceptance(stage:int)->void:
+	if stage not in prisoner_accepted_stages:prisoner_accepted_stages.append(stage)
+
+func get_card_level(card_id:String)->int:return maxi(1,int(card_levels.get(card_id,1)))
+func get_purchased_card_level(card_id:String)->int:return get_card_level(card_id)
+func get_max_level_for_card(card_id:String)->int:
+	var card:=CardDataRef.get_card_by_id(card_id)
+	if card==null:return 1
+	match card.rarity:
+		CardData.Rarity.COMMON,CardData.Rarity.RARE:return 2
+		CardData.Rarity.EPIC,CardData.Rarity.LEGENDARY:return 3
+		CardData.Rarity.GENESIS:return 4
+	return 1
+func get_upgrade_cost_for_rarity(rarity:int)->int:return [1,2,3,4,5,0][clampi(rarity,0,5)]
+func get_next_card_level_cost(card_id:String)->int:
+	var card:=CardDataRef.get_card_by_id(card_id)
+	if card==null or get_card_level(card_id)>=get_max_level_for_card(card_id):return 0
+	return get_upgrade_cost_for_rarity(card.rarity)
+func upgrade_card(card_id:String)->bool:
+	var cost:=get_next_card_level_cost(card_id)
+	if cost<=0 or rust_points<cost:return false
+	rust_points-=cost;var level:=get_card_level(card_id)+1;card_levels[card_id]=level;purchased_card_levels[card_id]=level;tech_points+=1;save_progress();return true
+func downgrade_card(_card_id:String)->bool:return false
+func clear_all_levels()->int:return 0
+func add_rust_points(amount:int)->void:rust_points+=maxi(0,amount);_run_rust_points+=maxi(0,amount)
+func get_run_rust_points()->int:return _run_rust_points
+func award_boss_rust(stage:int)->bool:
+	if stage in boss_rust_awarded_this_run:return false
+	boss_rust_awarded_this_run.append(stage);add_rust_points(1);save_progress();return true
+
+func purchase_tech(node_id:String,cost:int)->bool:
+	if node_id in purchased_tech_nodes or cost<0 or tech_points<cost:return false
+	tech_points-=cost;purchased_tech_nodes.append(node_id);save_progress();return true
+
+func mark_tutorial_topic(topic_id:String)->bool:
+	if not tutorial_enabled or topic_id in tutorial_seen_topics:return false
+	tutorial_seen_topics.append(topic_id);save_progress();return true
+
+func capture_battle_entry(cards:Array)->void:
+	if current_battle_seed<=0:current_battle_seed=randi_range(1,2147483646)
+	var ids:Array[String]=[]
 	for card in cards:
-		if card != null:
-			saved_battle_card_ids.append(str(card.card_id))
-	_battle_entry_snapshot = {
-		"gold": gold,
-		"assimilation_count": assimilation_count,
-		"current_stage": current_stage,
-		"current_node_index": current_node_index,
-		"stages_cleared": stages_cleared.duplicate(),
-		"consumable_items": consumable_items.duplicate(),
-		"boss_fragments": boss_fragments.duplicate(),
-		"assimilation_curse": assimilation_curse,
-		"temp_bonus_dice": _temp_bonus_dice,
-		"next_battle_fixed_six": next_battle_fixed_six,
-		"next_boss_dice_penalty": next_boss_dice_penalty,
-		"next_boss_start_assimilated": next_boss_start_assimilated,
-		"total_assimilations": total_assimilations,
-		"events_completed": events_completed,
-		"items_used": items_used,
-		"bosses_defeated": bosses_defeated.duplicate(),
-		"enemies_defeated_this_run": enemies_defeated_this_run,
-		"final_stage_reached": final_stage_reached,
-		"final_node_reached": final_node_reached,
-		"run_rust_points": _run_rust_points,
-		"run_xp": _run_xp,
-		"pending_xp": _pending_xp,
-		"card_ids": saved_battle_card_ids.duplicate(),
-		"battle_seed": current_battle_seed,
-		"stage_node_orders": stage_node_orders.duplicate(true),
-		"current_contract": current_contract.duplicate(true),
-		"active_forbidden_rules": active_forbidden_rules.duplicate(),
-		"prisoner_offer_stages": prisoner_offer_stages.duplicate(),
-		"prisoner_accepted_stages": prisoner_accepted_stages.duplicate(),
-		"prisoner_breaches": prisoner_breaches,
-		"prisoner_identity_revealed": prisoner_identity_revealed,
-		"royal_fragment_available": royal_fragment_available,
-		"stage_break_scores": stage_break_scores.duplicate(),
-		"current_battle_break_score": current_battle_break_score,
-		"current_break_streak": current_break_streak,
-	}
-
-func clear_battle_entry() -> void:
-	_battle_entry_snapshot.clear()
-	saved_battle_card_ids.clear()
-	current_battle_seed = 0
-	current_contract.clear()
-
-func _restore_battle_entry(snapshot: Dictionary) -> void:
-	gold = int(snapshot.get("gold", gold))
-	assimilation_count = int(snapshot.get("assimilation_count", assimilation_count))
-	current_stage = int(snapshot.get("current_stage", current_stage))
-	current_node_index = int(snapshot.get("current_node_index", current_node_index))
-	stages_cleared.assign(snapshot.get("stages_cleared", stages_cleared))
-	consumable_items.assign(snapshot.get("consumable_items", consumable_items))
-	boss_fragments.assign(snapshot.get("boss_fragments", boss_fragments))
-	assimilation_curse = str(snapshot.get("assimilation_curse", assimilation_curse))
-	_temp_bonus_dice = int(snapshot.get("temp_bonus_dice", 0))
-	next_battle_fixed_six = bool(snapshot.get("next_battle_fixed_six", false))
-	next_boss_dice_penalty = int(snapshot.get("next_boss_dice_penalty", 0))
-	next_boss_start_assimilated = bool(snapshot.get("next_boss_start_assimilated", false))
-	total_assimilations = int(snapshot.get("total_assimilations", total_assimilations))
-	events_completed = int(snapshot.get("events_completed", events_completed))
-	items_used = int(snapshot.get("items_used", items_used))
-	bosses_defeated.assign(snapshot.get("bosses_defeated", bosses_defeated))
-	enemies_defeated_this_run = int(snapshot.get("enemies_defeated_this_run", enemies_defeated_this_run))
-	final_stage_reached = int(snapshot.get("final_stage_reached", final_stage_reached))
-	final_node_reached = int(snapshot.get("final_node_reached", final_node_reached))
-	_run_rust_points = int(snapshot.get("run_rust_points", _run_rust_points))
-	_run_xp = int(snapshot.get("run_xp", _run_xp))
-	_pending_xp = int(snapshot.get("pending_xp", _pending_xp))
-	saved_battle_card_ids.assign(snapshot.get("card_ids", []))
-	current_battle_seed = int(snapshot.get("battle_seed", 0))
-	stage_node_orders = (snapshot.get("stage_node_orders", {}) as Dictionary).duplicate(true)
-	current_contract = (snapshot.get("current_contract", {}) as Dictionary).duplicate(true)
-	active_forbidden_rules.assign(snapshot.get("active_forbidden_rules", []))
-	prisoner_offer_stages.assign(snapshot.get("prisoner_offer_stages", []))
-	prisoner_accepted_stages.assign(snapshot.get("prisoner_accepted_stages", []))
-	prisoner_breaches = int(snapshot.get("prisoner_breaches", 0))
-	prisoner_identity_revealed = bool(snapshot.get("prisoner_identity_revealed", false))
-	royal_fragment_available = bool(snapshot.get("royal_fragment_available", false))
-	stage_break_scores.assign(snapshot.get("stage_break_scores", [0, 0, 0, 0]))
-	while stage_break_scores.size() < STAGE_BREAK_TARGETS.size():
-		stage_break_scores.append(0)
-	current_battle_break_score = int(snapshot.get("current_battle_break_score", 0))
-	current_break_streak = int(snapshot.get("current_break_streak", 0))
-
-func prepare_boss_break_score_retry() -> bool:
-	if _battle_entry_snapshot.is_empty():
-		return false
-	var preserved_scores: Array[int] = stage_break_scores.duplicate()
-	var snapshot: Dictionary = _battle_entry_snapshot.duplicate(true)
-	_restore_battle_entry(snapshot)
-	stage_break_scores.assign(preserved_scores)
-	current_battle_break_score = 0
-	current_break_streak = 0
-	current_battle_seed = 0
-	_emit_break_score_changed(0, "Boss重战")
+		if card!=null:ids.append(str(card.card_id))
+	_battle_entry_snapshot=_run_dictionary();_battle_entry_snapshot.card_ids=ids;_battle_entry_snapshot.battle_seed=current_battle_seed;save_run()
+func clear_battle_entry()->void:_battle_entry_snapshot.clear();current_battle_seed=0;current_contract.clear()
+func restore_battle_entry_preserving_costs()->bool:
+	if _battle_entry_snapshot.is_empty():return false
+	var saved_assimilation:=assimilation_count;var saved_total:=total_assimilations;var saved_fragments:=boss_fragments.duplicate();var saved_royal:=royal_fragment_available
+	_apply_run(_battle_entry_snapshot)
+	assimilation_count=saved_assimilation;total_assimilations=saved_total;boss_fragments.assign(saved_fragments);royal_fragment_available=saved_royal
 	return true
 
-func consume_royal_fragment_retry(persist: bool = true) -> bool:
-	if not royal_fragment_available or _battle_entry_snapshot.is_empty():
-		return false
-	var snapshot: Dictionary = _battle_entry_snapshot.duplicate(true)
-	_restore_battle_entry(snapshot)
-	royal_fragment_available = false
-	snapshot["royal_fragment_available"] = false
-	_battle_entry_snapshot = snapshot
-	if persist:
-		save_run()
-	return true
+func _run_dictionary()->Dictionary:
+	return {"gold":gold,"assimilation_count":assimilation_count,"current_stage":current_stage,"current_node_index":current_node_index,"stage_node_orders":stage_node_orders.duplicate(true),"player_deck":player_deck.duplicate(),"draw_pile":draw_pile.duplicate(),"discard_pile":discard_pile.duplicate(),"exhausted_pile":exhausted_pile.duplicate(),"boss_fragments":boss_fragments.duplicate(),"battle_seed":current_battle_seed,"current_contract":current_contract.duplicate(true),"prisoner_offer_stages":prisoner_offer_stages.duplicate(),"prisoner_accepted_stages":prisoner_accepted_stages.duplicate(),"prisoner_breaches":prisoner_breaches,"royal_fragment_available":royal_fragment_available,"boss_rust_awarded":boss_rust_awarded_this_run.duplicate(),"event_ids_seen":event_ids_seen_this_run.duplicate(),"next_battle_modifiers":next_battle_modifiers.duplicate(true),"after_battle_modifiers":after_battle_modifiers.duplicate(true),"active_forbidden_rules":active_forbidden_rules.duplicate(),"battle_rounds_used":battle_rounds_used,"bosses_defeated":bosses_defeated.duplicate(),"events_completed":events_completed,"total_assimilations":total_assimilations,"run_rust":_run_rust_points}
 
-func calculate_score() -> Dictionary:
-	var boss_bonus: int = bosses_defeated.size() * 100
-	var gold_bonus: int = gold / 4
-	var assimilation_penalty: int = total_assimilations * 50
-	var event_bonus: int = events_completed * 12
-	var total: int = boss_bonus + gold_bonus - assimilation_penalty + event_bonus
-	var tier: String = "C"
-	if total >= 480: tier = "S"
-	elif total >= 350: tier = "A"
-	elif total >= 220: tier = "B"
-	return {"score": total, "tier": tier, "boss_bonus": boss_bonus, "gold_bonus": gold_bonus, "assimilation_penalty": assimilation_penalty, "event_bonus": event_bonus}
+func _apply_run(data:Dictionary)->void:
+	gold=int(data.get("gold",0));assimilation_count=int(data.get("assimilation_count",0));current_stage=int(data.get("current_stage",0));current_node_index=int(data.get("current_node_index",0));stage_node_orders=(data.get("stage_node_orders",{}) as Dictionary).duplicate(true)
+	player_deck.assign(data.get("player_deck",PlayerCardRef.get_starter_deck_ids()));draw_pile.assign(data.get("draw_pile",[]));discard_pile.assign(data.get("discard_pile",[]));exhausted_pile.assign(data.get("exhausted_pile",[]));boss_fragments.assign(data.get("boss_fragments",[]));current_battle_seed=int(data.get("battle_seed",0));current_contract=(data.get("current_contract",{}) as Dictionary).duplicate(true)
+	prisoner_offer_stages.assign(data.get("prisoner_offer_stages",[]));prisoner_accepted_stages.assign(data.get("prisoner_accepted_stages",[]));prisoner_breaches=int(data.get("prisoner_breaches",0));royal_fragment_available=bool(data.get("royal_fragment_available",false));boss_rust_awarded_this_run.assign(data.get("boss_rust_awarded",[]));event_ids_seen_this_run.assign(data.get("event_ids_seen",[]));next_battle_modifiers=(data.get("next_battle_modifiers",{}) as Dictionary).duplicate(true);after_battle_modifiers=(data.get("after_battle_modifiers",{}) as Dictionary).duplicate(true);active_forbidden_rules.assign(data.get("active_forbidden_rules",[]));battle_rounds_used=int(data.get("battle_rounds_used",5));bosses_defeated.assign(data.get("bosses_defeated",[]));events_completed=int(data.get("events_completed",0));total_assimilations=int(data.get("total_assimilations",0));_run_rust_points=int(data.get("run_rust",0))
 
-func save_run(_dice_game_virus: int = 0, temporarily_disabled_items: Array = [], restart_modifiers: Dictionary = {}) -> void:
-	var snapshot: Dictionary = _battle_entry_snapshot.duplicate(true)
-	if snapshot.is_empty():
-		var saved_items: Array[String] = consumable_items.duplicate()
-		for item_id in temporarily_disabled_items:
-			saved_items.append(str(item_id))
-		snapshot = {
-			"gold": gold, "assimilation_count": clampi(maxi(assimilation_count, _dice_game_virus), 0, MAX_ASSIMILATION),
-			"current_stage": current_stage, "current_node_index": current_node_index,
-			"stages_cleared": stages_cleared.duplicate(), "consumable_items": saved_items,
-			"boss_fragments": boss_fragments.duplicate(), "assimilation_curse": assimilation_curse,
-			"temp_bonus_dice": maxi(_temp_bonus_dice, int(restart_modifiers.get("bonus_dice", 0))),
-			"next_battle_fixed_six": next_battle_fixed_six or bool(restart_modifiers.get("fixed_six", false)),
-			"next_boss_dice_penalty": maxi(next_boss_dice_penalty, int(restart_modifiers.get("boss_dice_penalty", 0))),
-			"next_boss_start_assimilated": next_boss_start_assimilated,
-			"card_ids": saved_battle_card_ids.duplicate(),
-			"battle_seed": current_battle_seed,
-			"stage_node_orders": stage_node_orders.duplicate(true),
-			"current_contract": current_contract.duplicate(true),
-			"active_forbidden_rules": active_forbidden_rules.duplicate(),
-			"prisoner_offer_stages": prisoner_offer_stages.duplicate(),
-			"prisoner_accepted_stages": prisoner_accepted_stages.duplicate(),
-			"prisoner_breaches": prisoner_breaches,
-			"prisoner_identity_revealed": prisoner_identity_revealed,
-			"royal_fragment_available": royal_fragment_available,
-			"stage_break_scores": stage_break_scores.duplicate(),
-			"current_battle_break_score": current_battle_break_score,
-			"current_break_streak": current_break_streak,
-		}
-	var f := FileAccess.open("user://save_game.dat", FileAccess.WRITE)
-	if not f:
+func save_run()->void:
+	var file:=FileAccess.open("user://save_game.dat",FileAccess.WRITE)
+	if file==null:return
+	file.store_pascal_string(RUN_MARKER);file.store_var(_run_dictionary(),true);file.close()
+func load_run()->bool:
+	var file:=FileAccess.open("user://save_game.dat",FileAccess.READ)
+	if file==null:return false
+	if file.get_pascal_string()!=RUN_MARKER:file.close();return false
+	var data:Variant=file.get_var(true);file.close()
+	if data is not Dictionary:return false
+	_apply_run(data);return true
+func has_saved_game()->bool:
+	var file:=FileAccess.open("user://save_game.dat",FileAccess.READ)
+	if file==null:return false
+	var valid:=file.get_pascal_string()==RUN_MARKER;file.close();return valid
+func delete_run_save()->void:
+	if FileAccess.file_exists("user://save_game.dat"):DirAccess.remove_absolute(ProjectSettings.globalize_path("user://save_game.dat"))
+func _clear_save()->void:delete_run_save();EventBus.run_started.emit()
+
+func save_progress()->void:
+	var file:=FileAccess.open("user://progress.dat",FileAccess.WRITE)
+	if file==null:return
+	file.store_pascal_string(PROGRESS_MARKER)
+	file.store_var({"has_cleared":has_cleared_game,"rust_points":rust_points,"tech_points":tech_points,"card_levels":card_levels.duplicate(),"unlocked_cards":unlocked_cards.duplicate(),"unlocked_player_cards":unlocked_player_cards.duplicate(),"tech_nodes":purchased_tech_nodes.duplicate(),"selected_forbidden":selected_forbidden_rules.duplicate(),"forbidden_limit":forbidden_slot_limit,"completed_three":completed_three_forbidden,"hidden_king":hidden_king_discovered,"tutorial_enabled":tutorial_enabled,"tutorial_completed":tutorial_completed,"tutorial_shop_seen":tutorial_shop_seen,"tutorial_topics":tutorial_seen_topics.duplicate()},true);file.close()
+
+func load_progress()->void:
+	_ensure_progress_defaults()
+	var file:=FileAccess.open("user://progress.dat",FileAccess.READ)
+	if file==null:return
+	var marker:=file.get_pascal_string()
+	if marker==PROGRESS_MARKER:
+		var data:Variant=file.get_var(true);file.close()
+		if data is Dictionary:_apply_progress(data)
 		return
-	f.store_32(int(snapshot.get("gold", gold)))
-	f.store_32(int(snapshot.get("assimilation_count", assimilation_count)))
-	f.store_32(int(snapshot.get("current_stage", current_stage)))
-	f.store_32(int(snapshot.get("current_node_index", current_node_index)))
-	var snap_stages: Array = snapshot.get("stages_cleared", stages_cleared)
-	f.store_32(snap_stages.size())
-	for s in snap_stages:
-		f.store_32(s)
-	var saved_items: Array = snapshot.get("consumable_items", consumable_items)
-	f.store_32(saved_items.size())
-	for item in saved_items:
-		f.store_pascal_string(item)
-	f.store_32(int(snapshot.get("assimilation_count", assimilation_count)))
-	f.store_32(int(snapshot.get("temp_bonus_dice", 0)))
-	f.store_32(1 if bool(snapshot.get("next_battle_fixed_six", false)) else 0)
-	f.store_32(int(snapshot.get("next_boss_dice_penalty", 0)))
-	f.store_32(1 if bool(snapshot.get("next_boss_start_assimilated", false)) else 0)
-	var snap_fragments: Array = snapshot.get("boss_fragments", boss_fragments)
-	f.store_32(snap_fragments.size())
-	for fragment_id in snap_fragments:
-		f.store_pascal_string(fragment_id)
-	f.store_pascal_string(str(snapshot.get("assimilation_curse", "")))
-	f.store_pascal_string("BATTLE_ENTRY_V2")
-	f.store_var(snapshot, true)
-	f.close()
+	# Legacy migration: preserve clear state, rust points and readable card levels.
+	file.seek(0);has_cleared_game=file.get_32()==1;rust_points=maxi(0,file.get_32());var count:=file.get_32()
+	if count>=0 and count<=128:
+		for _i in range(count):
+			var id:=file.get_pascal_string();var old_level:=file.get_32();if CardDataRef.get_card_by_id(id)!=null:card_levels[id]=clampi(maxi(1,old_level),1,get_max_level_for_card(id))
+	file.close();save_progress()
 
-func has_saved_game() -> bool:
-	return FileAccess.file_exists("user://save_game.dat")
+func _apply_progress(data:Dictionary)->void:
+	has_cleared_game=bool(data.get("has_cleared",false));rust_points=int(data.get("rust_points",0));tech_points=int(data.get("tech_points",0));card_levels=(data.get("card_levels",{}) as Dictionary).duplicate();purchased_card_levels=card_levels.duplicate();unlocked_cards.assign(data.get("unlocked_cards",unlocked_cards));unlocked_player_cards.assign(data.get("unlocked_player_cards",unlocked_player_cards));purchased_tech_nodes.assign(data.get("tech_nodes",[]));selected_forbidden_rules.assign(data.get("selected_forbidden",[]));forbidden_slot_limit=clampi(int(data.get("forbidden_limit",1)),1,3);completed_three_forbidden=bool(data.get("completed_three",false));hidden_king_discovered=bool(data.get("hidden_king",false));tutorial_enabled=bool(data.get("tutorial_enabled",true));tutorial_completed=bool(data.get("tutorial_completed",false));tutorial_shop_seen=bool(data.get("tutorial_shop_seen",false));tutorial_seen_topics.assign(data.get("tutorial_topics",[]));_ensure_progress_defaults()
 
-func load_run() -> bool:
-	var f := FileAccess.open("user://save_game.dat", FileAccess.READ)
-	if not f: return false
-	_battle_entry_snapshot.clear()
-	saved_battle_card_ids.clear()
-	current_battle_seed = 0
-	current_contract.clear()
-	gold = f.get_32()
-	assimilation_count = f.get_32()
-	current_stage = f.get_32()
-	current_node_index = f.get_32()
-	var sc: int = f.get_32()
-	stages_cleared.clear()
-	for _i in range(sc):
-		stages_cleared.append(f.get_32())
-	var ic: int = f.get_32()
-	consumable_items.clear()
-	for _i in range(ic):
-		consumable_items.append(f.get_pascal_string())
-	# Older saves may not contain the trailing battle-virus field.
-	if f.get_position() < f.get_length():
-		var saved_virus: int = f.get_32()
-		assimilation_count = clampi(maxi(assimilation_count, saved_virus), 0, MAX_ASSIMILATION)
-	if f.get_position() < f.get_length(): _temp_bonus_dice = f.get_32()
-	if f.get_position() < f.get_length(): next_battle_fixed_six = f.get_32() == 1
-	if f.get_position() < f.get_length(): next_boss_dice_penalty = f.get_32()
-	if f.get_position() < f.get_length(): next_boss_start_assimilated = f.get_32() == 1
-	boss_fragments.clear()
-	if f.get_position() < f.get_length():
-		var fragment_count: int = f.get_32()
-		for _i in range(fragment_count):
-			if f.get_position() < f.get_length(): boss_fragments.append(f.get_pascal_string())
-	if f.get_position() < f.get_length(): assimilation_curse = f.get_pascal_string()
-	if f.get_position() < f.get_length():
-		var marker: String = f.get_pascal_string()
-		if marker == "BATTLE_ENTRY_V2" and f.get_position() < f.get_length():
-			var loaded_snapshot: Variant = f.get_var(true)
-			if loaded_snapshot is Dictionary:
-				_battle_entry_snapshot = loaded_snapshot
-				_restore_battle_entry(_battle_entry_snapshot)
-	f.close()
-	return true
+func _ensure_progress_defaults()->void:
+	if unlocked_cards.is_empty():unlocked_cards.assign(["jack_crt","rust_warrior","battery_kid","cyclops_lcd","two_face","chamberlain","recycler","lucky_one","referee","alliance_oled","casino_owner","prophet","dice_god"])
+	if unlocked_player_cards.is_empty():
+		for card in PlayerCardRef.get_all_cards():unlocked_player_cards.append(card.card_id)
+	for card in CardDataRef.get_all_cards():
+		if card.rarity!=CardData.Rarity.UNKNOWN:card_levels[card.card_id]=clampi(maxi(1,int(card_levels.get(card.card_id,1))),1,get_max_level_for_card(card.card_id))
 
-func delete_run_save() -> void:
-	if FileAccess.file_exists("user://save_game.dat"):
-		DirAccess.remove_absolute("user://save_game.dat")
-
-func _clear_save() -> void:
-	delete_run_save()
-	refresh_shop(6)
-	EventBus.run_started.emit()
-
-func save_progress() -> void:
-	var f := FileAccess.open("user://progress.dat", FileAccess.WRITE)
-	if not f: return
-	f.store_32(1 if has_cleared_game else 0)
-	f.store_32(rust_points)
-	# card levels
-	f.store_32(card_levels.size())
-	for cid in card_levels:
-		f.store_pascal_string(cid)
-		f.store_32(card_levels[cid])
-	# unlocked cards
-	f.store_32(unlocked_cards.size())
-	for cid in unlocked_cards:
-		f.store_pascal_string(cid)
-	# unlocked items
-	f.store_32(unlocked_items.size())
-	for iid in unlocked_items:
-		f.store_pascal_string(iid)
-	# tutorial
-	f.store_32(1 if tutorial_enabled else 0)
-	f.store_32(player_xp)
-	f.store_32(player_level)
-	f.store_32(purchased_card_levels.size())
-	for cid in purchased_card_levels:
-		f.store_pascal_string(cid)
-		f.store_32(purchased_card_levels[cid])
-	f.store_32(1 if tutorial_completed else 0)
-	f.store_32(selected_forbidden_rules.size())
-	for rule_id in selected_forbidden_rules:
-		f.store_pascal_string(rule_id)
-	f.store_32(1 if tutorial_shop_seen else 0)
-	f.store_32(tutorial_seen_topics.size())
-	for topic_id in tutorial_seen_topics:
-		f.store_pascal_string(topic_id)
-	f.close()
-
-func load_progress() -> void:
-	if not FileAccess.file_exists("user://progress.dat"):
-		# No save file — still apply Lv.1 starter unlocks so the card pool isn't empty.
-		_apply_unlock(1)
-		_ensure_starter_items()
-		return
-	var f := FileAccess.open("user://progress.dat", FileAccess.READ)
-	if not f: return
-	has_cleared_game = f.get_32() == 1
-	rust_points = f.get_32()
-	card_levels.clear()
-	var cl_count: int = f.get_32()
-	if not _is_valid_progress_count(f, cl_count):
-		_recover_corrupt_progress(f, "card_levels")
-		return
-	for _i in range(cl_count):
-		var cid: String = f.get_pascal_string()
-		card_levels[cid] = f.get_32()
-	unlocked_cards.clear()
-	var uc_count: int = f.get_32()
-	if not _is_valid_progress_count(f, uc_count):
-		_recover_corrupt_progress(f, "unlocked_cards")
-		return
-	for _i in range(uc_count):
-		unlocked_cards.append(f.get_pascal_string())
-	unlocked_items.clear()
-	var ui_count: int = f.get_32()
-	if not _is_valid_progress_count(f, ui_count):
-		_recover_corrupt_progress(f, "unlocked_items")
-		return
-	for _i in range(ui_count):
-		unlocked_items.append(f.get_pascal_string())
-	tutorial_enabled = f.get_32() == 1
-	if f.get_position() < f.get_length():
-		player_xp = f.get_32()
-		player_level = max(1, f.get_32())
-	purchased_card_levels.clear()
-	if f.get_position() < f.get_length():
-		var purchased_count: int = f.get_32()
-		if not _is_valid_progress_count(f, purchased_count):
-			_recover_corrupt_progress(f, "purchased_card_levels")
-			return
-		for _i in range(purchased_count):
-			purchased_card_levels[f.get_pascal_string()] = f.get_32()
-	else:
-		purchased_card_levels = card_levels.duplicate()
-	if f.get_position() < f.get_length():
-		tutorial_completed = f.get_32() == 1
-	selected_forbidden_rules.clear()
-	if f.get_position() < f.get_length():
-		var forbidden_count: int = f.get_32()
-		if not _is_valid_progress_count(f, forbidden_count):
-			_recover_corrupt_progress(f, "selected_forbidden_rules")
-			return
-		for _i in range(forbidden_count):
-			if f.get_position() < f.get_length(): selected_forbidden_rules.append(f.get_pascal_string())
-	if f.get_position() < f.get_length(): tutorial_shop_seen = f.get_32() == 1
-	tutorial_seen_topics.clear()
-	if f.get_position() < f.get_length():
-		var topic_count: int = f.get_32()
-		if not _is_valid_progress_count(f, topic_count):
-			_recover_corrupt_progress(f, "tutorial_seen_topics")
-			return
-		for _i in range(topic_count):
-			if f.get_position() < f.get_length(): tutorial_seen_topics.append(f.get_pascal_string())
-	f.close()
-	_finalize_loaded_progress(false)
-
-func _is_valid_progress_count(file: FileAccess, count: int) -> bool:
-	const MAX_SERIALIZED_ENTRIES := 512
-	var remaining_bytes: int = file.get_length() - file.get_position()
-	return count >= 0 and count <= MAX_SERIALIZED_ENTRIES and count <= remaining_bytes / 4
-
-func _recover_corrupt_progress(file: FileAccess, section: String) -> void:
-	push_warning("Progress data is damaged near '%s'; keeping readable progress and repairing the file." % section)
-	file.close()
-	_finalize_loaded_progress(true)
-
-func _finalize_loaded_progress(force_save: bool) -> void:
-	var removed_invalid_ids: bool = false
-	for raw_id in card_levels.keys():
-		if CardData.get_card_by_id(str(raw_id)) == null:
-			card_levels.erase(raw_id)
-			removed_invalid_ids = true
-	for raw_id in purchased_card_levels.keys():
-		if CardData.get_card_by_id(str(raw_id)) == null:
-			purchased_card_levels.erase(raw_id)
-			removed_invalid_ids = true
-	var upgrade_data_migrated: bool = _migrate_three_level_upgrades()
-	# Rebuild all level-based unlocks so older saves with an empty card list migrate safely.
-	for level in range(1, player_level + 1):
-		_apply_unlock(level)
-	_ensure_starter_items()
-	if force_save or removed_invalid_ids or upgrade_data_migrated:
-		save_progress()
-
-func _migrate_three_level_upgrades() -> bool:
-	var changed: bool = false
-	var all_ids: Array = purchased_card_levels.keys()
-	for card_id in card_levels.keys():
-		if card_id not in all_ids: all_ids.append(card_id)
-	for raw_id in all_ids:
-		var card_id: String = str(raw_id)
-		var maximum: int = _get_max_level(card_id)
-		var purchased: int = int(purchased_card_levels.get(card_id, card_levels.get(card_id, 0)))
-		if purchased > maximum:
-			for removed_level in range(maximum + 1, purchased + 1):
-				rust_points += removed_level
-			purchased_card_levels[card_id] = maximum
-			changed = true
-		var active: int = int(card_levels.get(card_id, 0))
-		var clamped_active: int = clampi(active, 0, mini(maximum, int(purchased_card_levels.get(card_id, purchased))))
-		if clamped_active != active:
-			card_levels[card_id] = clamped_active
-			changed = true
-	return changed
-
-## Stage gold payout per layer
-static func get_stage_gold(stage: int) -> int:
-	var base: int
-	match stage:
-		0: base = 30
-		1: base = 45
-		2: base = 65
-		3: base = 90
-		_: base = 30
-	return base
+func calculate_score()->Dictionary:
+	var total:=bosses_defeated.size()*100+gold/4+events_completed*12-total_assimilations*50
+	var tier:="S" if total>=480 else ("A" if total>=350 else ("B" if total>=220 else "C"))
+	return {"score":total,"tier":tier,"boss_bonus":bosses_defeated.size()*100,"gold_bonus":gold/4,"assimilation_penalty":total_assimilations*50,"event_bonus":events_completed*12}
