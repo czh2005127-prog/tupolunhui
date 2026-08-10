@@ -57,6 +57,7 @@ func _ready()->void:
 	expected_sorted_values.sort()
 	for die_index in range(expected_sorted_values.size()):
 		var physical_die:RigidBody3D=battle._physical_dice_board._bodies[die_index]
+		assert(int(physical_die.get_meta("landing_top", 0))==expected_sorted_values[die_index])
 		assert(battle._physical_dice_board._detect_top_value(physical_die)==expected_sorted_values[die_index])
 		assert(str(physical_die.get_meta("settle_phase", ""))=="settled")
 		var sorting_rotation:Quaternion=physical_die.get_meta("sorting_rotation", Quaternion.IDENTITY)

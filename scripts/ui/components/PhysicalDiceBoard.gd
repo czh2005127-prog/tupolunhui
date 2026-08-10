@@ -14,6 +14,7 @@ const LINEAR_STOP_THRESHOLD := 0.13
 const ANGULAR_STOP_THRESHOLD := 0.18
 const REQUIRED_STILL_FRAMES := 10
 const MAX_ROLL_SECONDS := 3.0
+const FACE_LOCK_HEIGHT := 0.68
 
 var _viewport: SubViewport
 var _world: Node3D
@@ -41,6 +42,7 @@ func _physics_process(delta: float) -> void:
 	_roll_elapsed += delta
 	var all_still := not _bodies.is_empty()
 	for body in _bodies:
+		_lock_face_before_landing(body)
 		if not is_instance_valid(body) or body.position.y > 0.35 or body.linear_velocity.length() > LINEAR_STOP_THRESHOLD or body.angular_velocity.length() > ANGULAR_STOP_THRESHOLD:
 			all_still = false
 			break
@@ -62,6 +64,9 @@ func set_dice(dice: Array, animate: bool) -> void:
 	_clear_bodies()
 	for display_index in range(dice.size()):
 		var body := _create_die_body(display_index, dice[display_index])
+		body.set_meta("target_value", int((dice[display_index] as Dictionary).get("value", 1)))
+		body.set_meta("target_tilted", bool((dice[display_index] as Dictionary).get("locked", false)))
+		body.set_meta("face_locked", false)
 		_bodies.append(body)
 		_world.add_child(body)
 		if animate:
@@ -73,6 +78,8 @@ func set_dice(dice: Array, animate: bool) -> void:
 			body.freeze = true
 			body.position = _settled_position(display_index, dice.size())
 			body.basis = _top_basis(int((dice[display_index] as Dictionary).get("value", 1)), bool((dice[display_index] as Dictionary).get("locked", false)))
+			body.set_meta("face_locked", true)
+			body.set_meta("landing_top", int((dice[display_index] as Dictionary).get("value", 1)))
 	if animate:
 		_begin_roll_watch(dice, generation)
 
@@ -210,31 +217,46 @@ func _settle(dice: Array, generation: int) -> void:
 	_detected_top_values.clear()
 	for index in range(mini(_bodies.size(), dice.size())):
 		var body := _bodies[index]
+		_lock_target_face(body)
 		var detected_top := _detect_top_value(body)
 		_detected_top_values.append(detected_top)
 		body.set_meta("detected_top", detected_top)
 		body.freeze = true
 		body.linear_velocity = Vector3.ZERO
 		body.angular_velocity = Vector3.ZERO
-		var target_basis := _aligned_target_basis(body.basis, int((dice[index] as Dictionary).get("value", 1)), bool((dice[index] as Dictionary).get("locked", false)))
-		body.set_meta("settle_phase", "calibrating")
-		var calibration := create_tween()
-		calibration.tween_property(body, "quaternion", Quaternion(target_basis), 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		calibration.finished.connect(_sort_body_after_calibration.bind(body, index, dice.size(), generation, Quaternion(target_basis)))
+		_sort_body_without_rotation(body, index, dice.size(), generation)
 
-func _sort_body_after_calibration(body: RigidBody3D, index: int, count: int, generation: int, calibrated_rotation: Quaternion) -> void:
+func _sort_body_without_rotation(body: RigidBody3D, index: int, count: int, generation: int) -> void:
 	if generation != _generation or not is_instance_valid(body):
 		return
-	body.quaternion = calibrated_rotation
+	var fixed_rotation := body.quaternion
 	body.set_meta("settle_phase", "sorting")
-	body.set_meta("sorting_rotation", calibrated_rotation)
+	body.set_meta("sorting_rotation", fixed_rotation)
 	var sorting := create_tween()
 	sorting.tween_property(body, "position", _settled_position(index, count), 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	sorting.finished.connect(func() -> void:
 		if generation == _generation and is_instance_valid(body):
-			body.quaternion = calibrated_rotation
+			body.quaternion = fixed_rotation
 			body.set_meta("settle_phase", "settled")
 	)
+
+func _lock_face_before_landing(body: RigidBody3D) -> void:
+	if not is_instance_valid(body) or bool(body.get_meta("face_locked", false)):
+		return
+	if body.position.y <= FACE_LOCK_HEIGHT and body.linear_velocity.y <= 0.0:
+		_lock_target_face(body)
+
+func _lock_target_face(body: RigidBody3D) -> void:
+	if not is_instance_valid(body) or bool(body.get_meta("face_locked", false)):
+		return
+	var target_value := int(body.get_meta("target_value", 1))
+	body.basis = _aligned_target_basis(body.basis, target_value, bool(body.get_meta("target_tilted", false)))
+	body.angular_velocity = Vector3.ZERO
+	body.axis_lock_angular_x = true
+	body.axis_lock_angular_y = true
+	body.axis_lock_angular_z = true
+	body.set_meta("face_locked", true)
+	body.set_meta("landing_top", _detect_top_value(body))
 
 func _settled_position(index: int, count: int) -> Vector3:
 	var columns := 8
