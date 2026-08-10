@@ -2,6 +2,8 @@
 class_name CardDrawUI
 extends Control
 
+const CardFaceViewRef := preload("res://scripts/ui/components/CardFaceView.gd")
+
 var _pool: Array = []
 var _selected: Array = []
 var _flow_parent: Node = null
@@ -153,8 +155,18 @@ func _create_card_back(parent: Control, card: Resource, x: int, y: int, w: int, 
 	var qmark := _lbl("?", Vector2(0, h - 36), Vector2(w, 30), Color(0.35, 0.35, 0.4), 28)
 	qmark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	panel.add_child(qmark)
+	var back_view := CardFaceViewRef.new() as CardFaceView
+	back_view.setup_back(str(card.card_id))
+	panel.add_child(back_view)
+	var selection_overlay := ColorRect.new()
+	selection_overlay.position = Vector2.ZERO
+	selection_overlay.size = Vector2(w, h)
+	selection_overlay.color = Color(0.96, 0.76, 0.28, 0.24)
+	selection_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	selection_overlay.visible = false
+	panel.add_child(selection_overlay)
 
-	var entry := {"rect": panel, "card": card, "idx": idx, "back_stripe": stripe, "back_center": center, "back_qmark": qmark}
+	var entry := {"rect": panel, "card": card, "idx": idx, "back_stripe": stripe, "back_center": center, "back_qmark": qmark, "selection_overlay":selection_overlay}
 	_card_rects.append(entry)
 
 	panel.gui_input.connect(func(ev: InputEvent):
@@ -200,13 +212,13 @@ func _toggle_card(idx: int) -> void:
 	if already_idx >= 0:
 		_selected.remove_at(already_idx)
 		_selected_indices.remove_at(already_idx)
-		_card_rects[idx].rect.color = Color(0.08, 0.07, 0.1)
+		_card_rects[idx].selection_overlay.visible = false
 	else:
 		var max_picks: int = 1 if (_is_boss and _boss_phase == "boss") else _pick_count
 		if _selected.size() >= max_picks: return
 		_selected.append(card)
 		_selected_indices.append(idx)
-		_card_rects[idx].rect.color = _card_rects[idx].back_center.color.lightened(0.4)
+		_card_rects[idx].selection_overlay.visible = true
 	_update_confirm()
 
 func _update_confirm() -> void:
@@ -278,35 +290,16 @@ func _flip_content(rect: ColorRect) -> void:
 	# Clear existing children
 	for child in rect.get_children(): child.queue_free()
 	# Replace content with front face
-	rect.color = acc.darkened(0.7)
-
-	var stripe := ColorRect.new()
-	stripe.position = Vector2(0, 0); stripe.size = Vector2(rect.size.x, 4)
-	stripe.color = acc
-	rect.add_child(stripe)
-
-	var rarity_lbl := _lbl(card.get_rarity_name(), Vector2(6, 6), Vector2(50, 16), acc, 9)
-	rect.add_child(rarity_lbl)
-
-	var name_lbl := _lbl(card.card_name, Vector2(6, 50), Vector2(rect.size.x - 12, 28), Color(0.88, 0.85, 0.8), 12)
-	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; rect.add_child(name_lbl)
-
-	var sk_bg := ColorRect.new()
-	sk_bg.position = Vector2(4, 165); sk_bg.size = Vector2(rect.size.x - 8, 50)
-	sk_bg.color = Color(0.08, 0.06, 0.04); rect.add_child(sk_bg)
-
-	var sk_lbl := _lbl(card.skill_name, Vector2(6, 168), Vector2(rect.size.x - 12, 22), acc, 11)
-	sk_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; rect.add_child(sk_lbl)
-
+	rect.color = Color(0.02, 0.018, 0.015, 1)
 	var shown_desc: String = card.skill_desc
 	if _is_boss and _boss_phase == "boss":
 		var boss_info := preload("res://scripts/resources/BossFragmentData.gd").get_info(card.card_id)
 		if not boss_info.is_empty():
 			shown_desc += "\nBoss：" + str(boss_info.get("boss_name", "强化"))
-	var skd_lbl := _lbl(shown_desc, Vector2(6, 184), Vector2(rect.size.x - 12, 34), Color(0.4, 0.4, 0.4), 8)
-	skd_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	skd_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	rect.add_child(skd_lbl)
+	var face_view := CardFaceViewRef.new() as CardFaceView
+	face_view.position = Vector2((rect.size.x - 107.0) * 0.5, (rect.size.y - 155.0) * 0.5)
+	face_view.setup_opponent(card, "%s\n%s" % [card.skill_name, shown_desc])
+	rect.add_child(face_view)
 
 func _check_all_flipped() -> void:
 	if _phase != "revealing": return

@@ -1,6 +1,7 @@
 extends Control
 
 const PlayerCardRef := preload("res://scripts/resources/PlayerCardData.gd")
+const CardFaceViewRef := preload("res://scripts/ui/components/CardFaceView.gd")
 
 var _flow: Node
 var _page := "packs"
@@ -76,12 +77,19 @@ func _draw_stock()->void:
 	var stock:=_pack_stock if _page=="packs" else _single_stock
 	for i in range(stock.size()):
 		var item:Dictionary=stock[i];var panel:=PanelContainer.new();panel.custom_minimum_size=Vector2(380,185);_content.add_child(panel)
-		var box:=VBoxContainer.new();box.add_theme_constant_override("separation",8);panel.add_child(box)
-		var name:=_label(str(item.name),21,Color(0.93,0.8,0.47));name.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;box.add_child(name)
-		if item.kind=="pack":box.add_child(_label("内含%d张牌 · 允许重复"%item.cards.size(),15,Color(0.74,0.75,0.77)))
+		var price:=_effective_price(int(item.price));var buy:=Button.new();buy.text="已售罄" if bool(item.sold) else "购买 · %d金币"%price;buy.disabled=bool(item.sold) or GameState.gold<price;buy.pressed.connect(_buy.bind(i))
+		if item.kind=="pack":
+			var box:=VBoxContainer.new();box.add_theme_constant_override("separation",8);panel.add_child(box)
+			var name:=_label(str(item.name),21,Color(0.93,0.8,0.47));name.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;box.add_child(name)
+			box.add_child(_label("内含%d张牌 · 允许重复"%item.cards.size(),15,Color(0.74,0.75,0.77)))
+			buy.custom_minimum_size=Vector2(340,44);box.add_child(buy)
 		else:
-			var card:=PlayerCardRef.get_by_id(str(item.card_id));var desc:=_label(card.description,14,card.get_rarity_color());desc.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;desc.custom_minimum_size=Vector2(340,60);box.add_child(desc)
-		var price:=_effective_price(int(item.price));var buy:=Button.new();buy.text="已售罄" if bool(item.sold) else "购买 · %d金币"%price;buy.disabled=bool(item.sold) or GameState.gold<price;buy.custom_minimum_size=Vector2(340,44);buy.pressed.connect(_buy.bind(i));box.add_child(buy)
+			var row:=HBoxContainer.new();row.add_theme_constant_override("separation",14);panel.add_child(row)
+			var card:=PlayerCardRef.get_by_id(str(item.card_id));var face:=CardFaceViewRef.new() as CardFaceView;face.setup_player(card);row.add_child(face)
+			var box:=VBoxContainer.new();box.custom_minimum_size=Vector2(230,155);box.add_theme_constant_override("separation",7);row.add_child(box)
+			var name:=_label(card.card_name,18,card.get_rarity_color());box.add_child(name)
+			var desc:=_label(card.description,13,Color(0.78,0.76,0.72));desc.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;desc.custom_minimum_size=Vector2(225,72);box.add_child(desc)
+			buy.custom_minimum_size=Vector2(220,40);box.add_child(buy)
 	var refresh:Button=get_node("RefreshButton");var refresh_price:=0 if _free_refresh_available else _refresh_cost();refresh.text="刷新本页 · %d金币"%refresh_price;refresh.disabled=GameState.gold<refresh_price
 
 func _buy(index:int)->void:
@@ -101,9 +109,9 @@ func _acquire_card(id:String)->void:
 	var resolved:=[false]
 	var layer:=CanvasLayer.new();layer.layer=300;add_child(layer);var dim:=ColorRect.new();dim.color=Color(0,0,0,0.94);dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);layer.add_child(dim)
 	var title:=_label("牌库已满：选择一张替换为【%s】"%PlayerCardRef.get_by_id(id).card_name,24,Color(1,0.73,0.25));title.position=Vector2(180,65);title.size=Vector2(920,45);title.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;dim.add_child(title)
-	var scroll:=ScrollContainer.new();scroll.position=Vector2(120,130);scroll.size=Vector2(1040,430);dim.add_child(scroll);var grid:=GridContainer.new();grid.columns=5;scroll.add_child(grid)
+	var scroll:=ScrollContainer.new();scroll.position=Vector2(120,130);scroll.size=Vector2(1040,430);dim.add_child(scroll);var grid:=GridContainer.new();grid.columns=8;grid.add_theme_constant_override("h_separation",12);grid.add_theme_constant_override("v_separation",12);scroll.add_child(grid)
 	for i in range(GameState.player_deck.size()):
-		var old:=PlayerCardRef.get_by_id(GameState.player_deck[i]);var b:=Button.new();b.text="%s\n%s"%[old.card_name,old.get_rarity_name()];b.custom_minimum_size=Vector2(190,80);b.pressed.connect(func(index:int=i):GameState.player_deck[index]=id;layer.queue_free();resolved[0]=true);grid.add_child(b)
+		var old:=PlayerCardRef.get_by_id(GameState.player_deck[i]);var b:=Button.new();b.custom_minimum_size=Vector2(107,155);b.tooltip_text="替换【%s】"%old.card_name;b.pressed.connect(func(index:int=i):GameState.player_deck[index]=id;layer.queue_free();resolved[0]=true);var face:=CardFaceViewRef.new() as CardFaceView;face.setup_player(old);b.add_child(face);grid.add_child(b)
 	var discard:=Button.new();discard.text="丢弃新卡";discard.position=Vector2(510,595);discard.size=Vector2(260,50);discard.pressed.connect(func():layer.queue_free();resolved[0]=true);dim.add_child(discard)
 	while not resolved[0]:await get_tree().process_frame
 

@@ -2,6 +2,7 @@ extends Control
 
 const CardDataRef:=preload("res://scripts/resources/CardData.gd")
 const PlayerCardRef:=preload("res://scripts/resources/PlayerCardData.gd")
+const CardFaceViewRef:=preload("res://scripts/ui/components/CardFaceView.gd")
 var _content:Control
 var _currency:Label
 var _tab:="opponents"
@@ -43,11 +44,20 @@ func _draw_opponents()->void:
 	for card in CardDataRef.get_all_cards():
 		if card.rarity==CardData.Rarity.UNKNOWN:continue
 		var level:=GameState.get_card_level(card.card_id);var maximum:=GameState.get_max_level_for_card(card.card_id);var cost:=GameState.get_next_card_level_cost(card.card_id)
-		var panel:=PanelContainer.new();panel.custom_minimum_size=Vector2(280,180);grid.add_child(panel);var box:=VBoxContainer.new();panel.add_child(box)
-		var name:=_label("%s　%s"%[card.card_name,card.get_rarity_name()],18,card.get_rarity_color());box.add_child(name)
-		box.add_child(_label("等级 Lv.%d / Lv.%d"%[level,maximum],16,Color(0.8,0.82,0.85)))
-		var desc:=_label(card.skill_desc,12,Color(0.66,0.68,0.72));desc.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;desc.custom_minimum_size=Vector2(255,70);box.add_child(desc)
-		var upgrade:=Button.new();upgrade.text="已满级" if level>=maximum else "强化全部技能 · %d锈点"%cost;upgrade.disabled=level>=maximum or GameState.rust_points<cost;upgrade.pressed.connect(_upgrade.bind(card.card_id));box.add_child(upgrade)
+		var panel:=PanelContainer.new();panel.custom_minimum_size=Vector2(280,180);grid.add_child(panel);var row:=HBoxContainer.new();row.add_theme_constant_override("separation",10);panel.add_child(row)
+		var face:=CardFaceViewRef.new() as CardFaceView;face.setup_opponent(card,card.skill_name);row.add_child(face)
+		var box:=VBoxContainer.new();box.custom_minimum_size=Vector2(145,155);row.add_child(box)
+		var name:=_label("%s\n%s"%[card.card_name,card.get_rarity_name()],14,card.get_rarity_color());name.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;box.add_child(name)
+		box.add_child(_label("Lv.%d / Lv.%d"%[level,maximum],13,Color(0.8,0.82,0.85)))
+		var desc:=_label(card.skill_desc,10,Color(0.66,0.68,0.72));desc.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;desc.custom_minimum_size=Vector2(140,55);box.add_child(desc)
+		var upgrade:=Button.new();upgrade.text="已满级" if level>=maximum else "强化 · %d锈点"%cost;upgrade.disabled=level>=maximum or GameState.rust_points<cost;upgrade.pressed.connect(_upgrade.bind(card.card_id));box.add_child(upgrade)
+	if GameState.hidden_king_discovered:
+		var king:=CardDataRef.make("card_king","卡牌国王",CardData.Rarity.GENESIS,[CardDataRef.s("锈蚀敕令","continuous",5,"rust_used_cards","目标手牌使用后锈蚀占位。"),CardDataRef.s("王权征用","trigger",4,"bottom_high_card","罪证和高稀有度手牌送至牌库底。"),CardDataRef.s("国王禁令","continuous",4,"block_category","封锁一个卡牌类别。"),CardDataRef.s("记忆抹除","trigger",5,"randomize_dice","目标骰恢复本轮初始点数。")])
+		var panel:=PanelContainer.new();panel.custom_minimum_size=Vector2(280,180);grid.add_child(panel);var row:=HBoxContainer.new();row.add_theme_constant_override("separation",10);panel.add_child(row)
+		var face:=CardFaceViewRef.new() as CardFaceView;face.setup_opponent(king,"隐藏档案");row.add_child(face)
+		var box:=VBoxContainer.new();box.custom_minimum_size=Vector2(145,155);row.add_child(box);box.add_child(_label("卡牌国王\n隐藏档案",14,king.get_rarity_color()))
+		var desc:=_label(king.skill_desc,10,Color(0.66,0.68,0.72));desc.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;desc.custom_minimum_size=Vector2(140,90);box.add_child(desc)
+		var locked:=Button.new();locked.text="不可强化";locked.disabled=true;box.add_child(locked)
 
 func _upgrade(card_id:String)->void:
 	if GameState.upgrade_card(card_id):_refresh_currency();_draw_content()

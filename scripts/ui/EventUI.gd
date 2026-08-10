@@ -1,6 +1,7 @@
 extends Control
 
 const PlayerCardRef:=preload("res://scripts/resources/PlayerCardData.gd")
+const CardFaceViewRef:=preload("res://scripts/ui/components/CardFaceView.gd")
 var _flow:Node
 var _event:Dictionary={}
 
@@ -74,9 +75,9 @@ func _acquire_card(card_id:String)->void:
 	if GameState.add_player_card(card_id):return
 	var resolved:=[false];var layer:=CanvasLayer.new();layer.layer=300;add_child(layer);var dim:=ColorRect.new();dim.color=Color(0,0,0,0.94);dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);layer.add_child(dim)
 	var title:=_label("牌库已满：选择一张替换为【%s】"%PlayerCardRef.get_by_id(card_id).card_name,22,Color(0.95,0.74,0.3));title.position=Vector2(200,80);title.size=Vector2(880,50);title.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;dim.add_child(title)
-	var grid:=GridContainer.new();grid.columns=5;grid.position=Vector2(120,150);dim.add_child(grid)
+	var grid:=GridContainer.new();grid.columns=8;grid.position=Vector2(120,150);grid.add_theme_constant_override("h_separation",12);grid.add_theme_constant_override("v_separation",12);dim.add_child(grid)
 	for i in range(GameState.player_deck.size()):
-		var old:=PlayerCardRef.get_by_id(GameState.player_deck[i]);var button:=Button.new();button.text=old.card_name;button.custom_minimum_size=Vector2(195,62);button.pressed.connect(func(index:int=i):GameState.player_deck[index]=card_id;layer.queue_free();resolved[0]=true);grid.add_child(button)
+		var old:=PlayerCardRef.get_by_id(GameState.player_deck[i]);var button:=Button.new();button.custom_minimum_size=Vector2(107,155);button.tooltip_text="替换【%s】"%old.card_name;button.pressed.connect(func(index:int=i):GameState.player_deck[index]=card_id;layer.queue_free();resolved[0]=true);var face:=CardFaceViewRef.new() as CardFaceView;face.setup_player(old);button.add_child(face);grid.add_child(button)
 	var discard:=Button.new();discard.text="丢弃新卡";discard.position=Vector2(510,650);discard.size=Vector2(260,48);discard.pressed.connect(func():layer.queue_free();resolved[0]=true);dim.add_child(discard)
 	while not resolved[0]:await get_tree().process_frame
 func _remove_cards(count:int)->void:

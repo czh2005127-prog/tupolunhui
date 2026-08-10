@@ -178,7 +178,7 @@ func get_hand_limit() -> int:
 	limit=mini(limit,int(GameState.next_battle_modifiers.get("hand_limit",limit)))
 	for state in enemy_states:
 		if bool(state.active) and str(state.current.get("effect", "")) == "occupy_hand":
-			limit -= _target_count(state.card)
+			limit -= _target_count(state.card, 10)
 	return maxi(1, limit)
 
 func _draw_cards(count: int, allow_reshuffle: bool = false) -> void:
@@ -238,6 +238,27 @@ func request_use_card(hand_index: int, target_die: int = -1, secondary_die: int 
 
 func _needs_die_target(effect: String) -> bool:
 	return effect in ["reroll","flip","lock","adjust","clone","split","protect_die","fate_lock","mirror"]
+
+func is_die_target_legal(hand_index: int, target_die: int) -> bool:
+	if battle_over or hand_index < 0 or hand_index >= hand.size() or target_die < 0 or cup == null or target_die >= cup.dice.size():
+		return false
+	var entry: Dictionary = hand[hand_index]
+	if bool(entry.get("blocked", false)):
+		return false
+	var card: PlayerCardData = PlayerCardRef.get_by_id(str(entry.get("id", "")))
+	if card == null or not _needs_die_target(card.effect) or not _card_block_reason(card).is_empty():
+		return false
+	if bool(cup.dice[target_die].get("player_blocked", false)):
+		return false
+	if "forbidden_face" in GameState.active_forbidden_rules and card.effect == "adjust" and int(cup.dice[target_die].value) == 5:
+		return false
+	if not _die_target_block_reason(card, target_die).is_empty():
+		return false
+	if card.effect == "reroll" and bool(cup.dice[target_die].get("locked", false)):
+		return false
+	if card.effect == "split" and int(cup.dice[target_die].get("value", 0)) < 4:
+		return false
+	return true
 
 func _card_block_reason(card: PlayerCardData) -> String:
 	for state in enemy_states:
@@ -499,8 +520,68 @@ func get_view_state() -> Dictionary:
 		var next: Dictionary = {} if "closed_prophecy" in GameState.active_forbidden_rules else (skills[(int(state.skill_index)+1)%skills.size()] if not skills.is_empty() else {})
 		var next_two:Dictionary={}
 		if "alliance_oled" in GameState.boss_fragments and not skills.is_empty():next_two=skills[(int(state.skill_index)+2)%skills.size()]
-		enemy_views.append({"name":state.card.card_name,"rarity":state.card.get_rarity_name(),"color":state.card.get_rarity_color(),"current":state.current,"timer":state.timer,"next":next,"next_two":next_two,"ratio_count":_target_count(state.card)})
-	return {"round":round_number,"max_rounds":max_rounds,"total":total_score,"target":target_score,"phase":boss_phase,"dice":cup.dice.duplicate(true) if cup else [],"hand":hand.duplicate(true),"draw_count":draw_pile.size(),"discard_count":discard_pile.size(),"exhaust_count":exhausted_pile.size(),"retained":retained_indices.duplicate(),"preview":preview,"enemies":enemy_views,"over":battle_over,"hand_limit":get_hand_limit()}
+		var denominator := _target_denominator(state.card)
+		var eligible_count := _intent_eligible_count(str(state.current.get("effect", "")))
+		enemy_views.append({"card_id":state.card.card_id,"name":state.card.card_name,"rarity":state.card.get_rarity_name(),"color":state.card.get_rarity_color(),"current":state.current,"timer":state.timer,"next":next,"next_two":next_two,"ratio_count":_target_count(state.card,eligible_count),"ratio":"1/%d"%denominator,"skills":skills.duplicate(true),"skill_index":state.skill_index,"active":bool(state.active)})
+	return {"round":round_number,"max_rounds":max_rounds,"total":total_score,"target":target_score,"phase":boss_phase,"dice":cup.dice.duplicate(true) if cup else [],"hand":hand.duplicate(true),"draw_count":draw_pile.size(),"discard_count":discard_pile.size(),"exhaust_count":exhausted_pile.size(),"retained":retained_indices.duplicate(),"preview":preview,"enemies":enemy_views,"effects":_build_effect_views(),"over":battle_over,"hand_limit":get_hand_limit(),"gold":GameState.gold}
+
+func _build_effect_views() -> Array[Dictionary]:
+	var views: Array[Dictionary] = []
+	for state in enemy_states:
+		if not bool(state.get("active", false)):
+			continue
+		var skill: Dictionary = state.get("current", {})
+		views.append({
+			"category": _effect_icon_category(str(skill.get("effect", ""))),
+			"name": str(skill.get("name", "持续影响")),
+			"description": str(skill.get("desc", "")),
+			"remaining": int(state.get("timer", 0)),
+			"source": str(state.card.card_name),
+		})
+	if int(round_bonuses.get("chips", 0)) != 0 or int(round_bonuses.get("mult", 0)) != 0 or int(round_bonuses.get("final_mult", 1)) != 1:
+		views.append({"category":8,"name":"本轮强化","description":"卡牌给予的基础点数或倍率强化。","remaining":1,"source":"玩家卡牌"})
+	if battle_flags.has("fate_locks") or battle_flags.has("gold_engine") or battle_flags.has("winner_take_all"):
+		views.append({"category":8,"name":"本场持续效果","description":"本场对局内持续生效的卡牌能力。","remaining":-1,"source":"玩家卡牌"})
+	if not GameState.boss_fragments.is_empty():
+		views.append({"category":10,"name":"Boss碎片","description":"当前携带的碎片正在提供局内能力。","remaining":-1,"source":"碎片"})
+	return views
+
+func _effect_icon_category(effect: String) -> int:
+	if "rust" in effect or "remove" in effect:
+		return 1
+	if "lock" in effect or "seal" in effect or "block" in effect:
+		return 2
+	if "forbidden" in effect:
+		return 3
+	if "hide" in effect or "cover" in effect:
+		return 4
+	if "cost" in effect:
+		return 7
+	if "contract" in effect:
+		return 9
+	if "protect" in effect:
+		return 10
+	return 6
+
+func _target_denominator(card: CardData) -> int:
+	var level: int = GameState.get_card_level(card.card_id)
+	match card.rarity:
+		CardData.Rarity.COMMON, CardData.Rarity.RARE: return 3 if level <= 1 else 2
+		CardData.Rarity.EPIC, CardData.Rarity.LEGENDARY: return [4,3,2][clampi(level-1,0,2)]
+		CardData.Rarity.GENESIS: return [5,4,3,2][clampi(level-1,0,3)]
+		CardData.Rarity.UNKNOWN: return [5,4,3,2][stage]
+	return 3
+
+func _intent_eligible_count(effect: String) -> int:
+	if effect == "occupy_hand":
+		return 10
+	if effect in ["block_category","discard_high_card","block_repeat_name","block_persistent","limit_card_names","seal_hand","haunt_hand","bottom_high_card","shuffle_high_hand","cover_hand","remove_high_card","pair_hand","rotate_card_effects","used_to_bottom","rust_used_cards"]:
+		return hand.size()
+	if effect in ["seal_discard","seal_voluntary_discard"]:
+		return discard_pile.size()
+	if effect == "remove_draw_cards":
+		return draw_pile.size()
+	return cup.dice.size() if cup != null else 0
 
 func _emit_state() -> void: state_changed.emit(get_view_state())
 func _shuffle(array: Array) -> void:
