@@ -10,17 +10,45 @@ const FACE_TEXTURES: Array[Texture2D] = [
 	preload("res://assets/dice/die_6.png"),
 ]
 const HIDDEN_TEXTURE: Texture2D = preload("res://assets/dice/die_hidden.png")
+const LINEAR_STOP_THRESHOLD := 0.13
+const ANGULAR_STOP_THRESHOLD := 0.18
+const REQUIRED_STILL_FRAMES := 10
+const MAX_ROLL_SECONDS := 3.0
 
 var _viewport: SubViewport
 var _world: Node3D
 var _bodies: Array[RigidBody3D] = []
 var _last_signature := ""
 var _generation := 0
+var _rolling := false
+var _roll_elapsed := 0.0
+var _still_frames := 0
+var _rolling_generation := 0
+var _rolling_dice: Array = []
+var _detected_top_values: Array[int] = []
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clip_contents = true
 	stretch = true
 	_build_world()
+	set_physics_process(false)
+
+func _physics_process(delta: float) -> void:
+	if not _rolling or _rolling_generation != _generation:
+		set_physics_process(false)
+		return
+	_roll_elapsed += delta
+	var all_still := not _bodies.is_empty()
+	for body in _bodies:
+		if not is_instance_valid(body) or body.position.y > 0.35 or body.linear_velocity.length() > LINEAR_STOP_THRESHOLD or body.angular_velocity.length() > ANGULAR_STOP_THRESHOLD:
+			all_still = false
+			break
+	_still_frames = _still_frames + 1 if all_still else 0
+	if _still_frames >= REQUIRED_STILL_FRAMES or _roll_elapsed >= MAX_ROLL_SECONDS:
+		_rolling = false
+		set_physics_process(false)
+		_settle(_rolling_dice.duplicate(true), _rolling_generation)
 
 func set_dice(dice: Array, animate: bool) -> void:
 	var signature := _signature(dice)
@@ -29,6 +57,8 @@ func set_dice(dice: Array, animate: bool) -> void:
 	_last_signature = signature
 	_generation += 1
 	var generation := _generation
+	_rolling = false
+	set_physics_process(false)
 	_clear_bodies()
 	for display_index in range(dice.size()):
 		var body := _create_die_body(display_index, dice[display_index])
@@ -44,7 +74,16 @@ func set_dice(dice: Array, animate: bool) -> void:
 			body.position = _settled_position(display_index, dice.size())
 			body.basis = _top_basis(int((dice[display_index] as Dictionary).get("value", 1)), bool((dice[display_index] as Dictionary).get("locked", false)))
 	if animate:
-		get_tree().create_timer(0.75).timeout.connect(_settle.bind(dice.duplicate(true), generation))
+		_begin_roll_watch(dice, generation)
+
+func _begin_roll_watch(dice: Array, generation: int) -> void:
+	_rolling = true
+	_roll_elapsed = 0.0
+	_still_frames = 0
+	_rolling_generation = generation
+	_rolling_dice = dice.duplicate(true)
+	_detected_top_values.clear()
+	set_physics_process(true)
 
 func _build_world() -> void:
 	_viewport = SubViewport.new()
@@ -85,6 +124,10 @@ func _build_world() -> void:
 func _add_boundary(position_value: Vector3, box_size: Vector3) -> void:
 	var body := StaticBody3D.new()
 	body.position = position_value
+	var material := PhysicsMaterial.new()
+	material.friction = 0.82
+	material.bounce = 0.24
+	body.physics_material_override = material
 	var collision := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
 	shape.size = box_size
@@ -97,8 +140,13 @@ func _create_die_body(index: int, data: Dictionary) -> RigidBody3D:
 	body.name = "PhysicalDie%d" % index
 	body.mass = 0.85
 	body.gravity_scale = 1.35
-	body.linear_damp = 1.1
-	body.angular_damp = 0.85
+	body.linear_damp = 1.35
+	body.angular_damp = 1.12
+	body.continuous_cd = true
+	var physics_material := PhysicsMaterial.new()
+	physics_material.friction = 0.74
+	physics_material.bounce = 0.28
+	body.physics_material_override = physics_material
 	var collision := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
 	shape.size = Vector3(0.96, 0.96, 0.96)
@@ -159,12 +207,19 @@ func _create_die_mesh(hidden: bool) -> ArrayMesh:
 func _settle(dice: Array, generation: int) -> void:
 	if generation != _generation:
 		return
+	_detected_top_values.clear()
 	for index in range(mini(_bodies.size(), dice.size())):
 		var body := _bodies[index]
+		var detected_top := _detect_top_value(body)
+		_detected_top_values.append(detected_top)
+		body.set_meta("detected_top", detected_top)
 		body.freeze = true
+		body.linear_velocity = Vector3.ZERO
+		body.angular_velocity = Vector3.ZERO
+		var target_basis := _aligned_target_basis(body.basis, int((dice[index] as Dictionary).get("value", 1)), bool((dice[index] as Dictionary).get("locked", false)))
 		var tween := create_tween().set_parallel(true)
 		tween.tween_property(body, "position", _settled_position(index, dice.size()), 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		tween.tween_property(body, "basis", _top_basis(int((dice[index] as Dictionary).get("value", 1)), bool((dice[index] as Dictionary).get("locked", false))), 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tween.tween_property(body, "quaternion", Quaternion(target_basis), 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 func _settled_position(index: int, count: int) -> Vector3:
 	var columns := 8
@@ -174,7 +229,35 @@ func _settled_position(index: int, count: int) -> Vector3:
 	var start_x := -float(count_this_row - 1) * 0.725
 	var row_count := ceili(float(count) / float(columns))
 	var start_z := -float(row_count - 1) * 0.675
-	return Vector3(start_x + float(column) * 1.45, -0.02, start_z + float(row) * 1.35)
+	return Vector3(start_x + float(column) * 1.45, 0.08, start_z + float(row) * 1.35)
+
+func _detect_top_value(body: RigidBody3D) -> int:
+	var best_value := 1
+	var best_dot := -INF
+	for value in range(1, 7):
+		var world_normal := body.basis * _local_face_normal(value)
+		var alignment := world_normal.normalized().dot(Vector3.UP)
+		if alignment > best_dot:
+			best_dot = alignment
+			best_value = value
+	return best_value
+
+func _aligned_target_basis(current_basis: Basis, value: int, tilted: bool) -> Basis:
+	var world_target_normal := (current_basis * _local_face_normal(value)).normalized()
+	var alignment := Basis(Quaternion(world_target_normal, Vector3.UP))
+	var result := (alignment * current_basis).orthonormalized()
+	if tilted:
+		result = Basis(Vector3.UP, deg_to_rad(15.0)) * result
+	return result
+
+func _local_face_normal(value: int) -> Vector3:
+	match clampi(value, 1, 6):
+		1: return Vector3.UP
+		2: return Vector3(0, 0, 1)
+		3: return Vector3.RIGHT
+		4: return Vector3.LEFT
+		5: return Vector3(0, 0, -1)
+		_: return Vector3.DOWN
 
 func _top_basis(value: int, tilted: bool) -> Basis:
 	var basis := Basis.IDENTITY
@@ -189,6 +272,7 @@ func _top_basis(value: int, tilted: bool) -> Basis:
 	return basis
 
 func _clear_bodies() -> void:
+	_rolling = false
 	for body in _bodies:
 		if is_instance_valid(body):
 			body.queue_free()

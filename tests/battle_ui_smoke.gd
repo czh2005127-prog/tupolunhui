@@ -47,6 +47,16 @@ func _ready()->void:
 	assert(battle._physical_dice_board!=null)
 	assert(battle._physical_dice_board._bodies.size()==5)
 	assert(battle._dice_hitboxes.get_child_count()==5)
+	assert(battle._physical_dice_board.clip_contents)
+	await get_tree().create_timer(3.6).timeout
+	assert(not battle._physical_dice_board._rolling)
+	assert(battle._physical_dice_board._detected_top_values.size()==5)
+	var expected_sorted_values:Array[int]=[]
+	for die in battle._latest_state.dice:
+		expected_sorted_values.append(int(die.value))
+	expected_sorted_values.sort()
+	for die_index in range(expected_sorted_values.size()):
+		assert(battle._physical_dice_board._detect_top_value(battle._physical_dice_board._bodies[die_index])==expected_sorted_values[die_index])
 	assert(battle._hand_area.get_child_count()==6)
 	var first_player_card:=PlayerCardData.get_by_id(str(battle._latest_state.hand[0].id))
 	var first_player_face:=battle._hand_area.get_child(0).get_child(0) as Control
