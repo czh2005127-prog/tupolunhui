@@ -217,9 +217,24 @@ func _settle(dice: Array, generation: int) -> void:
 		body.linear_velocity = Vector3.ZERO
 		body.angular_velocity = Vector3.ZERO
 		var target_basis := _aligned_target_basis(body.basis, int((dice[index] as Dictionary).get("value", 1)), bool((dice[index] as Dictionary).get("locked", false)))
-		var tween := create_tween().set_parallel(true)
-		tween.tween_property(body, "position", _settled_position(index, dice.size()), 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		tween.tween_property(body, "quaternion", Quaternion(target_basis), 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		body.set_meta("settle_phase", "calibrating")
+		var calibration := create_tween()
+		calibration.tween_property(body, "quaternion", Quaternion(target_basis), 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		calibration.finished.connect(_sort_body_after_calibration.bind(body, index, dice.size(), generation, Quaternion(target_basis)))
+
+func _sort_body_after_calibration(body: RigidBody3D, index: int, count: int, generation: int, calibrated_rotation: Quaternion) -> void:
+	if generation != _generation or not is_instance_valid(body):
+		return
+	body.quaternion = calibrated_rotation
+	body.set_meta("settle_phase", "sorting")
+	body.set_meta("sorting_rotation", calibrated_rotation)
+	var sorting := create_tween()
+	sorting.tween_property(body, "position", _settled_position(index, count), 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	sorting.finished.connect(func() -> void:
+		if generation == _generation and is_instance_valid(body):
+			body.quaternion = calibrated_rotation
+			body.set_meta("settle_phase", "settled")
+	)
 
 func _settled_position(index: int, count: int) -> Vector3:
 	var columns := 8

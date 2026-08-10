@@ -48,7 +48,7 @@ func _ready()->void:
 	assert(battle._physical_dice_board._bodies.size()==5)
 	assert(battle._dice_hitboxes.get_child_count()==5)
 	assert(battle._physical_dice_board.clip_contents)
-	await get_tree().create_timer(3.6).timeout
+	await get_tree().create_timer(4.0).timeout
 	assert(not battle._physical_dice_board._rolling)
 	assert(battle._physical_dice_board._detected_top_values.size()==5)
 	var expected_sorted_values:Array[int]=[]
@@ -56,7 +56,11 @@ func _ready()->void:
 		expected_sorted_values.append(int(die.value))
 	expected_sorted_values.sort()
 	for die_index in range(expected_sorted_values.size()):
-		assert(battle._physical_dice_board._detect_top_value(battle._physical_dice_board._bodies[die_index])==expected_sorted_values[die_index])
+		var physical_die:RigidBody3D=battle._physical_dice_board._bodies[die_index]
+		assert(battle._physical_dice_board._detect_top_value(physical_die)==expected_sorted_values[die_index])
+		assert(str(physical_die.get_meta("settle_phase", ""))=="settled")
+		var sorting_rotation:Quaternion=physical_die.get_meta("sorting_rotation", Quaternion.IDENTITY)
+		assert(absf(physical_die.quaternion.dot(sorting_rotation))>0.9999)
 	assert(battle._hand_area.get_child_count()==6)
 	var first_player_card:=PlayerCardData.get_by_id(str(battle._latest_state.hand[0].id))
 	var first_player_face:=battle._hand_area.get_child(0).get_child(0) as Control
