@@ -56,12 +56,14 @@ func _ready()->void:
 		expected_sorted_values.append(int(die.value))
 	expected_sorted_values.sort()
 	for die_index in range(expected_sorted_values.size()):
-		var physical_die:RigidBody3D=battle._physical_dice_board._bodies[die_index]
+		var physical_die:RigidBody2D=battle._physical_dice_board._bodies[die_index]
 		assert(int(physical_die.get_meta("landing_top", 0))==expected_sorted_values[die_index])
 		assert(battle._physical_dice_board._detect_top_value(physical_die)==expected_sorted_values[die_index])
 		assert(str(physical_die.get_meta("settle_phase", ""))=="settled")
-		var sorting_rotation:Quaternion=physical_die.get_meta("sorting_rotation", Quaternion.IDENTITY)
-		assert(absf(physical_die.quaternion.dot(sorting_rotation))>0.9999)
+		assert(physical_die.freeze)
+		assert(absf(physical_die.rotation-battle._physical_dice_board._settled_rotation(bool(physical_die.get_meta("target_tilted",false))))<0.001)
+		assert((physical_die.get_child(0) as CollisionShape2D).shape is RectangleShape2D)
+		assert(physical_die.physics_material_override.bounce>0.0)
 	assert(battle._hand_area.get_child_count()==6)
 	var first_player_card:=PlayerCardData.get_by_id(str(battle._latest_state.hand[0].id))
 	var first_player_face:=battle._hand_area.get_child(0).get_child(0) as Control
@@ -151,12 +153,10 @@ func _ready()->void:
 			rolling_body_count+=1
 			rolling_source_index=int(physical_die.get_meta("source_index",-1))
 	assert(rolling_body_count==1 and rolling_source_index==reroll_target)
-	var normal_basis:Basis=battle._physical_dice_board._top_basis(4,false)
-	var locked_basis:Basis=battle._physical_dice_board._top_basis(4,true)
-	var face_normal:Vector3=battle._physical_dice_board._local_face_normal(4)
-	assert((normal_basis*face_normal).normalized().dot(Vector3.UP)>0.9999)
-	var locked_alignment:float=(locked_basis*face_normal).normalized().dot(Vector3.UP)
-	assert(locked_alignment>0.95 and locked_alignment<0.999)
+	var normal_rotation:float=battle._physical_dice_board._settled_rotation(false)
+	var locked_rotation:float=battle._physical_dice_board._settled_rotation(true)
+	assert(absf(normal_rotation)<0.001)
+	assert(is_equal_approx(locked_rotation,deg_to_rad(12.0)))
 	battle._on_battle_finished(true,1)
 	var result_panels:=battle.find_children("BattleResultPanel","TextureRect",true,false)
 	var result_buttons:=battle.find_children("BattleResultConfirmButton","TextureButton",true,false)

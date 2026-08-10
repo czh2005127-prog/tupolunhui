@@ -1,6 +1,9 @@
 class_name PhysicalDiceBoard
 extends SubViewportContainer
 
+## 仅负责骰子的二维刚体投掷、静止检测和点数锁定。
+## 特效、发光与粒子不属于本节点。
+
 const FACE_TEXTURES: Array[Texture2D] = [
 	preload("res://assets/dice/die_1.png"),
 	preload("res://assets/dice/die_2.png"),
@@ -10,15 +13,18 @@ const FACE_TEXTURES: Array[Texture2D] = [
 	preload("res://assets/dice/die_6.png"),
 ]
 const HIDDEN_TEXTURE: Texture2D = preload("res://assets/dice/die_hidden.png")
-const LINEAR_STOP_THRESHOLD := 0.13
-const ANGULAR_STOP_THRESHOLD := 0.18
-const REQUIRED_STILL_FRAMES := 10
-const MAX_ROLL_SECONDS := 3.0
-const FACE_LOCK_HEIGHT := 0.68
+
+const DIE_SIZE := 46.0
+const LINEAR_STOP_THRESHOLD := 12.0
+const ANGULAR_STOP_THRESHOLD := 0.42
+const REQUIRED_STILL_FRAMES := 12
+const MAX_ROLL_SECONDS := 3.2
+const SETTLE_TIME := 0.34
+const FACE_SECTOR := TAU / 6.0
 
 var _viewport: SubViewport
-var _world: Node3D
-var _bodies: Array[RigidBody3D] = []
+var _world: Node2D
+var _bodies: Array[RigidBody2D] = []
 var _last_signature := ""
 var _generation := 0
 var _rolling := false
@@ -35,23 +41,11 @@ func _ready() -> void:
 	_build_world()
 	set_physics_process(false)
 
-func _physics_process(delta: float) -> void:
-	if not _rolling or _rolling_generation != _generation:
-		set_physics_process(false)
-		return
-	_roll_elapsed += delta
-	var all_still := not _bodies.is_empty()
-	for body in _bodies:
-		_lock_face_before_landing(body)
-		if not is_instance_valid(body) or body.position.y > 0.35 or body.linear_velocity.length() > LINEAR_STOP_THRESHOLD or body.angular_velocity.length() > ANGULAR_STOP_THRESHOLD:
-			all_still = false
-			break
-	_still_frames = _still_frames + 1 if all_still else 0
-	if _still_frames >= REQUIRED_STILL_FRAMES or _roll_elapsed >= MAX_ROLL_SECONDS:
-		_rolling = false
-		set_physics_process(false)
-		_settle(_rolling_dice.duplicate(true), _rolling_generation)
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED and is_instance_valid(_viewport):
+		_viewport.size = Vector2i(maxi(1, roundi(size.x)), maxi(1, roundi(size.y)))
 
+## 建立一轮展示；rolling_indices 以排序后的显示下标为准。
 func set_dice(dice: Array, rolling_indices: Array[int] = []) -> void:
 	var signature := _signature(dice)
 	if signature == _last_signature and _bodies.size() == dice.size():
@@ -61,49 +55,71 @@ func set_dice(dice: Array, rolling_indices: Array[int] = []) -> void:
 	var generation := _generation
 	_rolling = false
 	set_physics_process(false)
+
 	var previous_positions: Dictionary = {}
 	for old_body in _bodies:
 		if is_instance_valid(old_body) and old_body.has_meta("source_index"):
 			previous_positions[int(old_body.get_meta("source_index"))] = old_body.position
 	_clear_bodies()
+
 	for display_index in range(dice.size()):
-		var body := _create_die_body(display_index, dice[display_index])
-		var source_index := int((dice[display_index] as Dictionary).get("_source_index", display_index))
+		var die_data := dice[display_index] as Dictionary
+		var body := _create_die_body(display_index, die_data)
+		var source_index := int(die_data.get("_source_index", display_index))
 		body.set_meta("source_index", source_index)
-		body.set_meta("target_value", int((dice[display_index] as Dictionary).get("value", 1)))
-		body.set_meta("target_tilted", bool((dice[display_index] as Dictionary).get("locked", false)))
-		body.set_meta("face_locked", false)
+		body.set_meta("target_value", clampi(int(die_data.get("value", 1)), 1, 6))
+		body.set_meta("hidden", bool(die_data.get("hidden", false)))
+		body.set_meta("target_tilted", bool(die_data.get("locked", false)))
+		body.set_meta("face_phase", randf_range(0.0, TAU))
+		body.set_meta("landing_top", 0)
+		body.set_meta("settle_phase", "rolling" if display_index in rolling_indices else "settled")
 		_bodies.append(body)
 		_world.add_child(body)
+
 		if display_index in rolling_indices:
-			body.position = Vector3(randf_range(-4.5, 4.5), randf_range(3.5, 6.2), randf_range(-1.6, 1.4))
-			body.rotation = Vector3(randf_range(-PI, PI), randf_range(-PI, PI), randf_range(-PI, PI))
-			body.apply_central_impulse(Vector3(randf_range(-2.5, 2.5), randf_range(0.6, 2.0), randf_range(-1.4, 1.4)))
-			body.apply_torque_impulse(Vector3(randf_range(-5.0, 5.0), randf_range(-5.0, 5.0), randf_range(-5.0, 5.0)))
+			_throw_die(body, rolling_indices.find(display_index), rolling_indices.size())
 		else:
 			body.freeze = true
 			body.position = previous_positions.get(source_index, _settled_position(display_index, dice.size()))
-			body.basis = _top_basis(int((dice[display_index] as Dictionary).get("value", 1)), bool((dice[display_index] as Dictionary).get("locked", false)))
-			body.set_meta("face_locked", true)
-			body.set_meta("landing_top", int((dice[display_index] as Dictionary).get("value", 1)))
-	if not rolling_indices.is_empty():
-		_begin_roll_watch(dice, generation)
-	else:
-		_sort_static_bodies(dice.size(), generation)
+			body.rotation = _settled_rotation(bool(die_data.get("locked", false)))
+			_lock_value(body, int(die_data.get("value", 1)))
 
-func _sort_static_bodies(count: int, generation: int) -> void:
-	for index in range(_bodies.size()):
-		var body := _bodies[index]
-		body.set_meta("settle_phase", "sorting")
-		var fixed_rotation := body.quaternion
-		body.set_meta("sorting_rotation", fixed_rotation)
-		var sorting := create_tween()
-		sorting.tween_property(body, "position", _settled_position(index, count), 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		sorting.finished.connect(func() -> void:
-			if generation == _generation and is_instance_valid(body):
-				body.quaternion = fixed_rotation
-				body.set_meta("settle_phase", "settled")
-		)
+	if rolling_indices.is_empty():
+		_refresh_detected_values()
+		_sort_static_bodies(dice.size(), generation)
+	else:
+		_begin_roll_watch(dice, generation)
+
+## 抛掷：刚体从骰子区上方落下，并获得随机水平冲量和扭矩。
+func _throw_die(body: RigidBody2D, order: int, rolling_count: int) -> void:
+	var board_width := maxf(size.x, 1.0)
+	var usable_width := maxf(DIE_SIZE, board_width - DIE_SIZE * 2.0)
+	var slot := usable_width / float(maxi(rolling_count, 1))
+	body.position = Vector2(DIE_SIZE + slot * (float(order) + 0.5), randf_range(DIE_SIZE, DIE_SIZE * 2.2))
+	body.rotation = randf_range(-PI, PI)
+	body.freeze = false
+	body.sleeping = false
+	body.apply_central_impulse(Vector2(randf_range(-165.0, 165.0), randf_range(-95.0, -35.0)))
+	body.apply_torque_impulse(randf_range(-8.5, 8.5))
+
+## 每个物理帧检测所有仍在运动的骰子；线速度和角速度均达标才算静止。
+func _physics_process(delta: float) -> void:
+	if not _rolling or _rolling_generation != _generation:
+		set_physics_process(false)
+		return
+	_roll_elapsed += delta
+	var all_still := not _bodies.is_empty()
+	for body in _bodies:
+		if not is_instance_valid(body) or body.freeze:
+			continue
+		_update_rolling_face(body)
+		if body.linear_velocity.length() > LINEAR_STOP_THRESHOLD or absf(body.angular_velocity) > ANGULAR_STOP_THRESHOLD:
+			all_still = false
+	_still_frames = _still_frames + 1 if all_still else 0
+	if _still_frames >= REQUIRED_STILL_FRAMES or _roll_elapsed >= MAX_ROLL_SECONDS:
+		_rolling = false
+		set_physics_process(false)
+		_settle(_rolling_dice.duplicate(true), _rolling_generation)
 
 func _begin_roll_watch(dice: Array, generation: int) -> void:
 	_rolling = true
@@ -114,218 +130,168 @@ func _begin_roll_watch(dice: Array, generation: int) -> void:
 	_detected_top_values.clear()
 	set_physics_process(true)
 
+## 静止后只判定一次点数，立即冻结刚体；后续排序不会重新判点。
+func _settle(dice: Array, generation: int) -> void:
+	if generation != _generation:
+		return
+	for index in range(mini(_bodies.size(), dice.size())):
+		var body := _bodies[index]
+		if not is_instance_valid(body):
+			continue
+		var target_value := clampi(int((dice[index] as Dictionary).get("value", 1)), 1, 6)
+		_align_face_mapping(body, target_value)
+		var detected_value := _detect_top_value(body)
+		_lock_value(body, detected_value)
+		body.freeze = true
+		body.sleeping = true
+		body.linear_velocity = Vector2.ZERO
+		body.angular_velocity = 0.0
+	_refresh_detected_values()
+	_sort_static_bodies(dice.size(), generation)
+
+## 将当前物理朝向解释为逻辑已经生成的结果，避免动画改写游戏数值。
+func _align_face_mapping(body: RigidBody2D, target_value: int) -> void:
+	var target_sector := float(clampi(target_value, 1, 6) - 1) * FACE_SECTOR
+	body.set_meta("face_phase", target_sector - body.rotation)
+	body.set_meta("landing_top", 0)
+
+## 依据平面旋转角度及骰子初始面向，计算当前朝上的点数。
+func _detect_top_value(body: RigidBody2D) -> int:
+	var locked_value := int(body.get_meta("landing_top", 0))
+	if locked_value > 0:
+		return locked_value
+	var phase := float(body.get_meta("face_phase", 0.0))
+	var normalized_angle := fposmod(body.rotation + phase, TAU)
+	return posmod(roundi(normalized_angle / FACE_SECTOR), 6) + 1
+
+func _lock_value(body: RigidBody2D, value: int) -> void:
+	var locked_value := clampi(value, 1, 6)
+	body.set_meta("landing_top", locked_value)
+	body.set_meta("detected_top", locked_value)
+	_set_face_texture(body, locked_value)
+
+func _update_rolling_face(body: RigidBody2D) -> void:
+	_set_face_texture(body, _detect_top_value(body))
+
+func _set_face_texture(body: RigidBody2D, value: int) -> void:
+	var sprite := body.get_node_or_null("Face") as Sprite2D
+	if sprite == null:
+		return
+	var texture := HIDDEN_TEXTURE if bool(body.get_meta("hidden", false)) else FACE_TEXTURES[clampi(value, 1, 6) - 1]
+	sprite.texture = texture
+	if texture != null and texture.get_width() > 0 and texture.get_height() > 0:
+		sprite.scale = Vector2(DIE_SIZE / float(texture.get_width()), DIE_SIZE / float(texture.get_height()))
+
+func _refresh_detected_values() -> void:
+	_detected_top_values.clear()
+	for body in _bodies:
+		if is_instance_valid(body):
+			_detected_top_values.append(_detect_top_value(body))
+
+func _sort_static_bodies(count: int, generation: int) -> void:
+	for index in range(_bodies.size()):
+		var body := _bodies[index]
+		if not is_instance_valid(body):
+			continue
+		body.freeze = true
+		body.set_meta("settle_phase", "sorting")
+		var final_rotation := _settled_rotation(bool(body.get_meta("target_tilted", false)))
+		var sorting := create_tween().set_parallel(true)
+		sorting.tween_property(body, "position", _settled_position(index, count), SETTLE_TIME).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		sorting.tween_property(body, "rotation", final_rotation, SETTLE_TIME).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		sorting.finished.connect(func() -> void:
+			if generation == _generation and is_instance_valid(body):
+				body.rotation = final_rotation
+				body.set_meta("settle_phase", "settled")
+		)
+
+func _settled_rotation(tilted: bool) -> float:
+	return deg_to_rad(12.0) if tilted else 0.0
+
+func _settled_position(index: int, count: int) -> Vector2:
+	var columns := 8
+	var row := floori(float(index) / float(columns))
+	var column := index % columns
+	var count_this_row := mini(columns, count - row * columns)
+	var spacing_x := 62.0
+	var spacing_y := 61.0
+	var row_count := ceili(float(count) / float(columns))
+	var start_x := (size.x - float(count_this_row - 1) * spacing_x) * 0.5
+	var bottom_y := maxf(DIE_SIZE * 0.75, size.y - DIE_SIZE * 0.78)
+	var start_y := bottom_y - float(row_count - 1) * spacing_y
+	return Vector2(start_x + float(column) * spacing_x, start_y + float(row) * spacing_y)
+
 func _build_world() -> void:
 	_viewport = SubViewport.new()
-	_viewport.name = "DiceViewport3D"
-	_viewport.size = Vector2i(maxi(1, int(size.x)), maxi(1, int(size.y)))
+	_viewport.name = "DiceViewport2D"
+	_viewport.size = Vector2i(maxi(1, roundi(size.x)), maxi(1, roundi(size.y)))
 	_viewport.transparent_bg = true
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	add_child(_viewport)
-	_world = Node3D.new()
-	_world.name = "DiceWorld"
+	_world = Node2D.new()
+	_world.name = "DiceWorld2D"
 	_viewport.add_child(_world)
-	var camera := Camera3D.new()
-	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	camera.size = 7.2
-	camera.position = Vector3(0, 11.5, 4.2)
-	camera.look_at_from_position(camera.position, Vector3(0, 0.25, 0), Vector3.UP)
-	_world.add_child(camera)
-	var light := DirectionalLight3D.new()
-	light.rotation_degrees = Vector3(-58, -28, 0)
-	light.light_energy = 1.25
-	light.shadow_enabled = true
-	_world.add_child(light)
-	var environment := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0, 0, 0, 0)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("8a755f")
-	env.ambient_light_energy = 0.72
-	environment.environment = env
-	_world.add_child(environment)
-	_add_boundary(Vector3(0, -0.65, 0), Vector3(12.0, 0.5, 6.2))
-	_add_boundary(Vector3(-6.1, 1.4, 0), Vector3(0.3, 4.2, 6.2))
-	_add_boundary(Vector3(6.1, 1.4, 0), Vector3(0.3, 4.2, 6.2))
-	_add_boundary(Vector3(0, 1.4, -3.1), Vector3(12.0, 4.2, 0.3))
-	_add_boundary(Vector3(0, 1.4, 3.1), Vector3(12.0, 4.2, 0.3))
+	_build_boundaries()
 
-func _add_boundary(position_value: Vector3, box_size: Vector3) -> void:
-	var body := StaticBody3D.new()
+func _build_boundaries() -> void:
+	var board_width := maxf(size.x, 1.0)
+	var board_height := maxf(size.y, 1.0)
+	_add_boundary(Vector2(board_width * 0.5, board_height - 9.0), Vector2(board_width, 18.0))
+	_add_boundary(Vector2(9.0, board_height * 0.5), Vector2(18.0, board_height))
+	_add_boundary(Vector2(board_width - 9.0, board_height * 0.5), Vector2(18.0, board_height))
+	_add_boundary(Vector2(board_width * 0.5, 9.0), Vector2(board_width, 18.0))
+
+func _add_boundary(position_value: Vector2, box_size: Vector2) -> void:
+	var body := StaticBody2D.new()
 	body.position = position_value
 	var material := PhysicsMaterial.new()
-	material.friction = 0.82
+	material.friction = 0.78
 	material.bounce = 0.24
+	material.rough = true
 	body.physics_material_override = material
-	var collision := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
+	var collision := CollisionShape2D.new()
+	var shape := RectangleShape2D.new()
 	shape.size = box_size
 	collision.shape = shape
 	body.add_child(collision)
 	_world.add_child(body)
 
-func _create_die_body(index: int, data: Dictionary) -> RigidBody3D:
-	var body := RigidBody3D.new()
+func _create_die_body(index: int, data: Dictionary) -> RigidBody2D:
+	var body := RigidBody2D.new()
 	body.name = "PhysicalDie%d" % index
-	body.mass = 0.85
+	body.mass = 0.82
 	body.gravity_scale = 1.35
-	body.linear_damp = 1.35
-	body.angular_damp = 1.12
-	body.continuous_cd = true
-	var physics_material := PhysicsMaterial.new()
-	physics_material.friction = 0.74
-	physics_material.bounce = 0.28
-	body.physics_material_override = physics_material
-	var collision := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = Vector3(0.96, 0.96, 0.96)
+	body.linear_damp = 0.72
+	body.angular_damp = 1.45
+	body.continuous_cd = RigidBody2D.CCD_MODE_CAST_SHAPE
+	body.contact_monitor = true
+	body.max_contacts_reported = 8
+	body.collision_layer = 1
+	body.collision_mask = 1
+	var material := PhysicsMaterial.new()
+	material.friction = 0.72
+	material.bounce = 0.34
+	material.rough = true
+	body.physics_material_override = material
+	var collision := CollisionShape2D.new()
+	var shape := RectangleShape2D.new()
+	shape.size = Vector2(DIE_SIZE * 0.88, DIE_SIZE * 0.88)
 	collision.shape = shape
 	body.add_child(collision)
-	var solid_mesh := MeshInstance3D.new()
-	var solid_box := BoxMesh.new()
-	solid_box.size = Vector3(0.94, 0.94, 0.94)
-	var solid_material := StandardMaterial3D.new()
-	solid_material.albedo_color = Color("6f5b40")
-	solid_material.roughness = 0.92
-	solid_box.material = solid_material
-	solid_mesh.mesh = solid_box
-	solid_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	body.add_child(solid_mesh)
-	var mesh_instance := MeshInstance3D.new()
-	mesh_instance.mesh = _create_die_mesh(bool(data.get("hidden", false)))
-	mesh_instance.scale = Vector3(1.045, 1.045, 1.045)
-	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	body.add_child(mesh_instance)
+	var sprite := Sprite2D.new()
+	sprite.name = "Face"
+	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	body.add_child(sprite)
+	body.set_meta("hidden", bool(data.get("hidden", false)))
+	_set_face_texture(body, int(data.get("value", 1)))
 	return body
-
-func _create_die_mesh(hidden: bool) -> ArrayMesh:
-	var mesh := ArrayMesh.new()
-	var faces := [
-		{"normal":Vector3.UP,"corners":[Vector3(-.48,.48,-.48),Vector3(.48,.48,-.48),Vector3(.48,.48,.48),Vector3(-.48,.48,.48)],"value":1},
-		{"normal":Vector3(0,0,1),"corners":[Vector3(-.48,-.48,.48),Vector3(.48,-.48,.48),Vector3(.48,.48,.48),Vector3(-.48,.48,.48)],"value":2},
-		{"normal":Vector3.RIGHT,"corners":[Vector3(.48,-.48,.48),Vector3(.48,-.48,-.48),Vector3(.48,.48,-.48),Vector3(.48,.48,.48)],"value":3},
-		{"normal":Vector3.LEFT,"corners":[Vector3(-.48,-.48,-.48),Vector3(-.48,-.48,.48),Vector3(-.48,.48,.48),Vector3(-.48,.48,-.48)],"value":4},
-		{"normal":Vector3(0,0,-1),"corners":[Vector3(.48,-.48,-.48),Vector3(-.48,-.48,-.48),Vector3(-.48,.48,-.48),Vector3(.48,.48,-.48)],"value":5},
-		{"normal":Vector3.DOWN,"corners":[Vector3(-.48,-.48,.48),Vector3(.48,-.48,.48),Vector3(.48,-.48,-.48),Vector3(-.48,-.48,-.48)],"value":6},
-	]
-	for face in faces:
-		var surface := SurfaceTool.new()
-		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-		var corners: Array = face.corners
-		var vertex_indices := [0, 1, 2, 0, 2, 3]
-		if face.normal == Vector3.UP or face.normal == Vector3.DOWN:
-			vertex_indices = [0, 2, 1, 0, 3, 2]
-		var corner_uvs := [Vector2(0,1),Vector2(1,1),Vector2(1,0),Vector2(0,0)]
-		for triangle_index in range(vertex_indices.size()):
-			var vertex_index: int = vertex_indices[triangle_index]
-			surface.set_normal(face.normal)
-			surface.set_uv(corner_uvs[vertex_index])
-			surface.add_vertex(corners[vertex_index])
-		surface.commit(mesh)
-		var material := StandardMaterial3D.new()
-		material.albedo_texture = HIDDEN_TEXTURE if hidden else FACE_TEXTURES[int(face.value) - 1]
-		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-		material.alpha_scissor_threshold = 0.05
-		material.cull_mode = BaseMaterial3D.CULL_DISABLED
-		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-		material.roughness = 0.86
-		mesh.surface_set_material(mesh.get_surface_count() - 1, material)
-	return mesh
-
-func _settle(dice: Array, generation: int) -> void:
-	if generation != _generation:
-		return
-	_detected_top_values.clear()
-	for index in range(mini(_bodies.size(), dice.size())):
-		var body := _bodies[index]
-		_lock_target_face(body)
-		var detected_top := _detect_top_value(body)
-		_detected_top_values.append(detected_top)
-		body.set_meta("detected_top", detected_top)
-		body.freeze = true
-		body.linear_velocity = Vector3.ZERO
-		body.angular_velocity = Vector3.ZERO
-		_sort_body_without_rotation(body, index, dice.size(), generation)
-
-func _sort_body_without_rotation(body: RigidBody3D, index: int, count: int, generation: int) -> void:
-	if generation != _generation or not is_instance_valid(body):
-		return
-	var fixed_rotation := body.quaternion
-	body.set_meta("settle_phase", "sorting")
-	body.set_meta("sorting_rotation", fixed_rotation)
-	var sorting := create_tween()
-	sorting.tween_property(body, "position", _settled_position(index, count), 0.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	sorting.finished.connect(func() -> void:
-		if generation == _generation and is_instance_valid(body):
-			body.quaternion = fixed_rotation
-			body.set_meta("settle_phase", "settled")
-	)
-
-func _lock_face_before_landing(body: RigidBody3D) -> void:
-	if not is_instance_valid(body) or bool(body.get_meta("face_locked", false)):
-		return
-	if body.position.y <= FACE_LOCK_HEIGHT and body.linear_velocity.y <= 0.0:
-		_lock_target_face(body)
-
-func _lock_target_face(body: RigidBody3D) -> void:
-	if not is_instance_valid(body) or bool(body.get_meta("face_locked", false)):
-		return
-	var target_value := int(body.get_meta("target_value", 1))
-	body.basis = _top_basis(target_value, bool(body.get_meta("target_tilted", false)))
-	body.angular_velocity = Vector3.ZERO
-	body.axis_lock_angular_x = true
-	body.axis_lock_angular_y = true
-	body.axis_lock_angular_z = true
-	body.set_meta("face_locked", true)
-	body.set_meta("landing_top", _detect_top_value(body))
-
-func _settled_position(index: int, count: int) -> Vector3:
-	var columns := 8
-	var row := floori(float(index) / float(columns))
-	var column := index % columns
-	var count_this_row := mini(columns, count - row * columns)
-	var start_x := -float(count_this_row - 1) * 0.725
-	var row_count := ceili(float(count) / float(columns))
-	var start_z := -float(row_count - 1) * 0.675
-	return Vector3(start_x + float(column) * 1.45, 0.08, start_z + float(row) * 1.35)
-
-func _detect_top_value(body: RigidBody3D) -> int:
-	var best_value := 1
-	var best_dot := -INF
-	for value in range(1, 7):
-		var world_normal := body.basis * _local_face_normal(value)
-		var alignment := world_normal.normalized().dot(Vector3.UP)
-		if alignment > best_dot:
-			best_dot = alignment
-			best_value = value
-	return best_value
-
-func _local_face_normal(value: int) -> Vector3:
-	match clampi(value, 1, 6):
-		1: return Vector3.UP
-		2: return Vector3(0, 0, 1)
-		3: return Vector3.RIGHT
-		4: return Vector3.LEFT
-		5: return Vector3(0, 0, -1)
-		_: return Vector3.DOWN
-
-func _top_basis(value: int, tilted: bool) -> Basis:
-	var basis := Basis.IDENTITY
-	match clampi(value, 1, 6):
-		2: basis = Basis(Vector3.RIGHT, -PI * 0.5)
-		3: basis = Basis(Vector3.FORWARD, -PI * 0.5)
-		4: basis = Basis(Vector3.FORWARD, PI * 0.5)
-		5: basis = Basis(Vector3.RIGHT, PI * 0.5)
-		6: basis = Basis(Vector3.RIGHT, PI)
-	if tilted:
-		basis = Basis(Vector3.FORWARD, deg_to_rad(12.0)) * basis
-	return basis
 
 func _clear_bodies() -> void:
 	_rolling = false
 	for body in _bodies:
 		if is_instance_valid(body):
+			if body.get_parent() != null:
+				body.get_parent().remove_child(body)
 			body.queue_free()
 	_bodies.clear()
 
