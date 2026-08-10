@@ -207,7 +207,11 @@ func request_use_card(hand_index: int, target_die: int = -1, secondary_die: int 
 		return {"ok":false,"error":"禁忌骰面：不能直接把骰子调整成⑥"}
 	var die_reason:=_die_target_block_reason(card,target_die)
 	if not die_reason.is_empty():return {"ok":false,"error":die_reason}
+	# Resolve the played card outside the hand. Hand-changing effects must only
+	# discard, exhaust, protect, or copy the cards that remain in the hand.
+	var played_entry: Dictionary = hand.pop_at(hand_index)
 	if not _apply_card(card, target_die, secondary_die):
+		hand.insert(mini(hand_index, hand.size()), played_entry)
 		return {"ok":false, "error":"当前没有合法目标或条件未满足"}
 	var used_position:=cards_used_this_round.size()+1
 	if card.rarity==PlayerCardData.Rarity.LEGENDARY:battle_flags.used_legendary=true
@@ -225,8 +229,7 @@ func request_use_card(hand_index: int, target_die: int = -1, secondary_die: int 
 	var unique_names:Dictionary={}
 	for used_id in cards_used_this_round:unique_names[used_id]=true
 	battle_flags.max_unique_names=maxi(int(battle_flags.get("max_unique_names",0)),unique_names.size())
-	var removed: Dictionary = hand.pop_at(hand_index)
-	if not bool(removed.get("temporary", false)):
+	if not bool(played_entry.get("temporary", false)):
 		if _used_cards_go_bottom(): draw_pile.push_front(card.card_id)
 		else: discard_pile.append(card.card_id)
 	var skip_tick:bool="rush_clock" in GameState.active_forbidden_rules and cards_used_this_round.size()==1
@@ -323,7 +326,7 @@ func _apply_card(card: PlayerCardData, target: int, secondary: int) -> bool:
 		"draw": _draw_cards(card.amount)
 		"draw_to_max": _draw_cards(get_hand_limit() - hand.size())
 		"discard_draw":
-			var n := mini(card.amount, maxi(0, hand.size()-1)); _discard_other_random(n); _draw_cards(card.secondary if card.secondary > 0 else n)
+			var n := mini(card.amount, hand.size()); _discard_other_random(n); _draw_cards(card.secondary if card.secondary > 0 else n)
 		"search_draw": _draw_cards(1)
 		"recover":
 			if discard_pile.is_empty(): return false
@@ -338,7 +341,7 @@ func _apply_card(card: PlayerCardData, target: int, secondary: int) -> bool:
 			if previous == null or previous.effect in ["copy","repeat_last"]: return false
 			return _apply_card(previous, target, secondary)
 		"discard_chips":
-			var n := maxi(0, hand.size()-1); _discard_other_random(n); round_bonuses.chips = int(round_bonuses.chips) + n * card.amount
+			var n := hand.size(); _discard_other_random(n); round_bonuses.chips = int(round_bonuses.chips) + n * card.amount
 		"protect_die": return cup.protect(target)
 		"protect_card":
 			if hand.is_empty(): return false
@@ -352,7 +355,7 @@ func _apply_card(card: PlayerCardData, target: int, secondary: int) -> bool:
 			else: _discard_other_random(1)
 		"pattern_gold": battle_flags.pattern_gold = {"reward":card.amount,"penalty":card.secondary}
 		"exhaust_gold":
-			var n := mini(card.secondary, maxi(0,hand.size()-1)); _exhaust_other(n); GameState.add_gold(n*card.amount)
+			var n := mini(card.secondary, hand.size()); _exhaust_other(n); GameState.add_gold(n*card.amount)
 		"investment":
 			if not GameState.spend_gold(card.secondary): return false
 			battle_flags.investment = card.amount

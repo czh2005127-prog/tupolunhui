@@ -17,6 +17,7 @@ func _ready()->void:
 	_test_candidates()
 	_test_enemy_levels()
 	_test_node_order()
+	_test_hand_mutating_cards()
 	_test_battle_boot()
 	print("RULE_LOGIC_SMOKE_OK")
 	get_tree().quit(0)
@@ -69,6 +70,27 @@ func _test_node_order()->void:
 	assert(flow.nodes_this_stage.size()==7);assert(flow.nodes_this_stage.back()==flow.NodeType.BOSS)
 	assert(flow.nodes_this_stage.count(flow.NodeType.DICE)==3);assert(flow.nodes_this_stage.count(flow.NodeType.EVENT)==2)
 	flow.free()
+
+func _test_hand_mutating_cards()->void:
+	var game:=DiceGameRef.new();add_child(game);game.configure(0,[],false,0)
+	game.hand=[
+		{"id":"old_chip","temporary":false,"protected":false},
+		{"id":"amp_gear","temporary":false,"protected":false},
+		{"id":"scrap_turbine","temporary":false,"protected":false},
+	]
+	var result:Dictionary=game.request_use_card(2)
+	assert(result.ok,"改变手牌的卡牌不能因旧手牌下标而崩溃")
+	assert(game.hand.is_empty(),"废牌涡轮应弃掉结算区之外的所有手牌")
+	assert(game.discard_pile.count("scrap_turbine")==1,"正在结算的牌只能在结算完成后进入弃牌堆一次")
+	game.hand=[
+		{"id":"old_chip","temporary":false,"protected":false},
+		{"id":"reverse_search","temporary":false,"protected":false},
+	]
+	game.discard_pile.clear()
+	var failed:Dictionary=game.request_use_card(1)
+	assert(not failed.ok,"弃牌堆为空时回收牌应使用失败")
+	assert(game.hand.size()==2 and str(game.hand[1].id)=="reverse_search","失败结算必须把卡牌放回原手牌位置")
+	game.queue_free()
 
 func _test_battle_boot()->void:
 	GameState.player_deck.assign(PlayerCardRef.get_starter_deck_ids());GameState.current_battle_seed=12345
