@@ -59,7 +59,7 @@ func _build_world() -> void:
 	var camera := Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
 	camera.size = 7.2
-	camera.position = Vector3(0, 8.2, 7.8)
+	camera.position = Vector3(0, 11.5, 4.2)
 	camera.look_at_from_position(camera.position, Vector3(0, 0.25, 0), Vector3.UP)
 	_world.add_child(camera)
 	var light := DirectionalLight3D.new()
@@ -104,9 +104,20 @@ func _create_die_body(index: int, data: Dictionary) -> RigidBody3D:
 	shape.size = Vector3(0.96, 0.96, 0.96)
 	collision.shape = shape
 	body.add_child(collision)
+	var solid_mesh := MeshInstance3D.new()
+	var solid_box := BoxMesh.new()
+	solid_box.size = Vector3(0.94, 0.94, 0.94)
+	var solid_material := StandardMaterial3D.new()
+	solid_material.albedo_color = Color("6f5b40")
+	solid_material.roughness = 0.92
+	solid_box.material = solid_material
+	solid_mesh.mesh = solid_box
+	solid_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	body.add_child(solid_mesh)
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.mesh = _create_die_mesh(bool(data.get("hidden", false)))
-	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	mesh_instance.scale = Vector3(1.045, 1.045, 1.045)
+	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	body.add_child(mesh_instance)
 	return body
 
@@ -125,15 +136,21 @@ func _create_die_mesh(hidden: bool) -> ArrayMesh:
 		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 		var corners: Array = face.corners
 		var vertex_indices := [0, 1, 2, 0, 2, 3]
-		var uvs := [Vector2(0,1),Vector2(1,1),Vector2(1,0),Vector2(0,1),Vector2(1,0),Vector2(0,0)]
+		if face.normal == Vector3.UP or face.normal == Vector3.DOWN:
+			vertex_indices = [0, 2, 1, 0, 3, 2]
+		var corner_uvs := [Vector2(0,1),Vector2(1,1),Vector2(1,0),Vector2(0,0)]
 		for triangle_index in range(vertex_indices.size()):
 			var vertex_index: int = vertex_indices[triangle_index]
 			surface.set_normal(face.normal)
-			surface.set_uv(uvs[triangle_index])
+			surface.set_uv(corner_uvs[vertex_index])
 			surface.add_vertex(corners[vertex_index])
 		surface.commit(mesh)
 		var material := StandardMaterial3D.new()
 		material.albedo_texture = HIDDEN_TEXTURE if hidden else FACE_TEXTURES[int(face.value) - 1]
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+		material.alpha_scissor_threshold = 0.05
+		material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 		material.roughness = 0.86
 		mesh.surface_set_material(mesh.get_surface_count() - 1, material)
