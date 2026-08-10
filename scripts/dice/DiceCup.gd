@@ -33,6 +33,7 @@ func roll_all() -> void:
 	for die in dice:
 		if not bool(die.locked):
 			die.value = rng.randi_range(1, 6)
+			die.modified = int(die.get("modified", 0)) + 1
 
 func get_values() -> Array[int]:
 	var result: Array[int] = []

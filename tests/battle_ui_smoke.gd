@@ -123,6 +123,40 @@ func _ready()->void:
 	assert(battle._pending_hand_index==target_card_index and is_instance_valid(battle._target_cursor))
 	battle._cancel_die_targeting()
 	assert(battle._pending_hand_index==-1 and battle._latest_state.hand.size()==hand_before_target)
+	var reroll_index:=-1
+	for index in range(battle._latest_state.hand.size()):
+		if str(battle._latest_state.hand[index].id)=="reroll_stone":
+			reroll_index=index
+			break
+	assert(reroll_index>=0)
+	var reroll_target:=-1
+	for die_index in range(battle._latest_state.dice.size()):
+		if battle._game.is_die_target_legal(reroll_index,die_index):
+			reroll_target=die_index
+			break
+	assert(reroll_target>=0)
+	var values_before_reroll:Array[int]=battle._game.cup.get_all_values()
+	var modified_before_reroll:int=int(battle._game.cup.dice[reroll_target].modified)
+	var reroll_result:Dictionary=battle._game.request_use_card(reroll_index,reroll_target)
+	assert(bool(reroll_result.get("ok",false)))
+	for die_index in range(values_before_reroll.size()):
+		if die_index!=reroll_target:
+			assert(int(battle._game.cup.dice[die_index].value)==values_before_reroll[die_index])
+	assert(int(battle._game.cup.dice[reroll_target].modified)==modified_before_reroll+1)
+	await get_tree().process_frame
+	var rolling_body_count:=0
+	var rolling_source_index:=-1
+	for physical_die in battle._physical_dice_board._bodies:
+		if not physical_die.freeze:
+			rolling_body_count+=1
+			rolling_source_index=int(physical_die.get_meta("source_index",-1))
+	assert(rolling_body_count==1 and rolling_source_index==reroll_target)
+	var normal_basis:Basis=battle._physical_dice_board._top_basis(4,false)
+	var locked_basis:Basis=battle._physical_dice_board._top_basis(4,true)
+	var face_normal:Vector3=battle._physical_dice_board._local_face_normal(4)
+	assert((normal_basis*face_normal).normalized().dot(Vector3.UP)>0.9999)
+	var locked_alignment:float=(locked_basis*face_normal).normalized().dot(Vector3.UP)
+	assert(locked_alignment>0.95 and locked_alignment<0.999)
 	battle._on_battle_finished(true,1)
 	var result_panels:=battle.find_children("BattleResultPanel","TextureRect",true,false)
 	var result_buttons:=battle.find_children("BattleResultConfirmButton","TextureButton",true,false)

@@ -52,7 +52,7 @@ func _physics_process(delta: float) -> void:
 		set_physics_process(false)
 		_settle(_rolling_dice.duplicate(true), _rolling_generation)
 
-func set_dice(dice: Array, animate: bool) -> void:
+func set_dice(dice: Array, rolling_indices: Array[int] = []) -> void:
 	var signature := _signature(dice)
 	if signature == _last_signature and _bodies.size() == dice.size():
 		return
@@ -61,27 +61,49 @@ func set_dice(dice: Array, animate: bool) -> void:
 	var generation := _generation
 	_rolling = false
 	set_physics_process(false)
+	var previous_positions: Dictionary = {}
+	for old_body in _bodies:
+		if is_instance_valid(old_body) and old_body.has_meta("source_index"):
+			previous_positions[int(old_body.get_meta("source_index"))] = old_body.position
 	_clear_bodies()
 	for display_index in range(dice.size()):
 		var body := _create_die_body(display_index, dice[display_index])
+		var source_index := int((dice[display_index] as Dictionary).get("_source_index", display_index))
+		body.set_meta("source_index", source_index)
 		body.set_meta("target_value", int((dice[display_index] as Dictionary).get("value", 1)))
 		body.set_meta("target_tilted", bool((dice[display_index] as Dictionary).get("locked", false)))
 		body.set_meta("face_locked", false)
 		_bodies.append(body)
 		_world.add_child(body)
-		if animate:
+		if display_index in rolling_indices:
 			body.position = Vector3(randf_range(-4.5, 4.5), randf_range(3.5, 6.2), randf_range(-1.6, 1.4))
 			body.rotation = Vector3(randf_range(-PI, PI), randf_range(-PI, PI), randf_range(-PI, PI))
 			body.apply_central_impulse(Vector3(randf_range(-2.5, 2.5), randf_range(0.6, 2.0), randf_range(-1.4, 1.4)))
 			body.apply_torque_impulse(Vector3(randf_range(-5.0, 5.0), randf_range(-5.0, 5.0), randf_range(-5.0, 5.0)))
 		else:
 			body.freeze = true
-			body.position = _settled_position(display_index, dice.size())
+			body.position = previous_positions.get(source_index, _settled_position(display_index, dice.size()))
 			body.basis = _top_basis(int((dice[display_index] as Dictionary).get("value", 1)), bool((dice[display_index] as Dictionary).get("locked", false)))
 			body.set_meta("face_locked", true)
 			body.set_meta("landing_top", int((dice[display_index] as Dictionary).get("value", 1)))
-	if animate:
+	if not rolling_indices.is_empty():
 		_begin_roll_watch(dice, generation)
+	else:
+		_sort_static_bodies(dice.size(), generation)
+
+func _sort_static_bodies(count: int, generation: int) -> void:
+	for index in range(_bodies.size()):
+		var body := _bodies[index]
+		body.set_meta("settle_phase", "sorting")
+		var fixed_rotation := body.quaternion
+		body.set_meta("sorting_rotation", fixed_rotation)
+		var sorting := create_tween()
+		sorting.tween_property(body, "position", _settled_position(index, count), 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		sorting.finished.connect(func() -> void:
+			if generation == _generation and is_instance_valid(body):
+				body.quaternion = fixed_rotation
+				body.set_meta("settle_phase", "settled")
+		)
 
 func _begin_roll_watch(dice: Array, generation: int) -> void:
 	_rolling = true
@@ -250,7 +272,7 @@ func _lock_target_face(body: RigidBody3D) -> void:
 	if not is_instance_valid(body) or bool(body.get_meta("face_locked", false)):
 		return
 	var target_value := int(body.get_meta("target_value", 1))
-	body.basis = _aligned_target_basis(body.basis, target_value, bool(body.get_meta("target_tilted", false)))
+	body.basis = _top_basis(target_value, bool(body.get_meta("target_tilted", false)))
 	body.angular_velocity = Vector3.ZERO
 	body.axis_lock_angular_x = true
 	body.axis_lock_angular_y = true
@@ -279,14 +301,6 @@ func _detect_top_value(body: RigidBody3D) -> int:
 			best_value = value
 	return best_value
 
-func _aligned_target_basis(current_basis: Basis, value: int, tilted: bool) -> Basis:
-	var world_target_normal := (current_basis * _local_face_normal(value)).normalized()
-	var alignment := Basis(Quaternion(world_target_normal, Vector3.UP))
-	var result := (alignment * current_basis).orthonormalized()
-	if tilted:
-		result = Basis(Vector3.UP, deg_to_rad(15.0)) * result
-	return result
-
 func _local_face_normal(value: int) -> Vector3:
 	match clampi(value, 1, 6):
 		1: return Vector3.UP
@@ -305,7 +319,7 @@ func _top_basis(value: int, tilted: bool) -> Basis:
 		5: basis = Basis(Vector3.RIGHT, PI * 0.5)
 		6: basis = Basis(Vector3.RIGHT, PI)
 	if tilted:
-		basis = Basis(Vector3.UP, deg_to_rad(15.0)) * basis
+		basis = Basis(Vector3.FORWARD, deg_to_rad(12.0)) * basis
 	return basis
 
 func _clear_bodies() -> void:
@@ -318,5 +332,5 @@ func _clear_bodies() -> void:
 func _signature(dice: Array) -> String:
 	var parts: Array[String] = []
 	for die in dice:
-		parts.append("%d:%d:%d" % [int(die.get("value", 0)), int(die.get("locked", false)), int(die.get("hidden", false))])
+		parts.append("%d:%d:%d:%d" % [int(die.get("value", 0)), int(die.get("locked", false)), int(die.get("hidden", false)), int(die.get("modified", 0))])
 	return "|".join(parts)

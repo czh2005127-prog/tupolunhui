@@ -586,12 +586,23 @@ func _rebuild_dice(dice: Array, old_dice: Array = [], animate_roll: bool = false
 		return int((dice[a] as Dictionary).get("value", 0)) < int((dice[b] as Dictionary).get("value", 0))
 	)
 	var sorted_dice: Array = []
-	var any_changed := old_dice.size() != dice.size()
-	for original_index in display_order:
-		sorted_dice.append((dice[original_index] as Dictionary).duplicate(true))
-		if original_index >= old_dice.size() or int((old_dice[original_index] as Dictionary).get("value", -1)) != int((dice[original_index] as Dictionary).get("value", -1)):
-			any_changed = true
-	_physical_dice_board.set_dice(sorted_dice, animate_roll or any_changed)
+	var rolling_display_indices: Array[int] = []
+	for display_index in range(display_order.size()):
+		var original_index := display_order[display_index]
+		var visual_die: Dictionary = (dice[original_index] as Dictionary).duplicate(true)
+		visual_die["_source_index"] = original_index
+		sorted_dice.append(visual_die)
+		var current_die: Dictionary = dice[original_index]
+		var should_roll := animate_roll and not bool(current_die.get("locked", false))
+		if not animate_roll:
+			if original_index >= old_dice.size():
+				should_roll = true
+			else:
+				var old_die: Dictionary = old_dice[original_index]
+				should_roll = int(old_die.get("value", -1)) != int(current_die.get("value", -1)) or int(old_die.get("modified", 0)) != int(current_die.get("modified", 0))
+		if should_roll:
+			rolling_display_indices.append(display_index)
+	_physical_dice_board.set_dice(sorted_dice, rolling_display_indices)
 	for display_index in range(display_order.size()):
 		var index := display_order[display_index]
 		var widget := DieWidgetRef.new() as CombatDieWidget
