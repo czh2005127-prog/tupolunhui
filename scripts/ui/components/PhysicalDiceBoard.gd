@@ -12,16 +12,15 @@ const FACE_TEXTURES: Array[Texture2D] = [
 	preload("res://assets/dice/die_5.png"),
 	preload("res://assets/dice/die_6.png"),
 ]
-const HIDDEN_TEXTURE: Texture2D = preload("res://assets/dice/die_hidden.png")
+const BASE_TEXTURE: Texture2D = preload("res://assets/dice/die_base.png")
 
-const CONTROL_START_SECONDS := 0.62
-const CONTROL_HEIGHT := 0.82
-const LINEAR_CONTROL_THRESHOLD := 1.15
-const ANGULAR_CONTROL_THRESHOLD := 2.4
-const MAX_FREE_ROLL_SECONDS := 1.45
-const FACE_CORRECTION_SECONDS := 0.18
-const LANDING_HOLD_SECONDS := 0.22
-const SORT_SECONDS := 0.32
+const CONTROL_START_SECONDS := 0.48
+const CONTROL_HEIGHT := 0.92
+const MAX_FREE_ROLL_SECONDS := 1.12
+const FACE_CORRECTION_SECONDS := 0.14
+const LANDING_HOLD_SECONDS := 0.32
+const SORT_LIFT_SECONDS := 0.10
+const SORT_SLIDE_SECONDS := 0.28
 const REST_HEIGHT := 0.08
 
 var _viewport: SubViewport
@@ -120,8 +119,9 @@ func _physics_process(delta: float) -> void:
 		if not is_instance_valid(body) or body.freeze or str(body.get_meta("settle_phase", "")) != "rolling":
 			continue
 		var close_to_table := body.position.y <= CONTROL_HEIGHT
-		var slowing_down := body.linear_velocity.length() <= LINEAR_CONTROL_THRESHOLD and body.angular_velocity.length() <= ANGULAR_CONTROL_THRESHOLD
-		if _roll_elapsed >= CONTROL_START_SECONDS and close_to_table and slowing_down:
+		# The result correction happens while the die is still moving quickly. Waiting until
+		# it has visibly stopped is what made the old animation look as if it turned itself.
+		if _roll_elapsed >= CONTROL_START_SECONDS and close_to_table:
 			_begin_face_correction(body, _rolling_generation)
 		elif _roll_elapsed >= MAX_FREE_ROLL_SECONDS:
 			_begin_face_correction(body, _rolling_generation)
@@ -136,7 +136,7 @@ func _begin_face_correction(body: RigidBody3D, generation: int) -> void:
 	body.angular_velocity = Vector3.ZERO
 	var target_value := int(body.get_meta("target_value", 1))
 	var random_yaw := randf_range(-PI, PI)
-	var target_basis := Basis(Vector3.UP, random_yaw) * _top_basis(target_value, false)
+	var target_basis := Basis(Vector3.UP, random_yaw) * _top_basis(target_value, bool(body.get_meta("target_tilted", false)))
 	var target_position := body.position
 	target_position.x = clampf(target_position.x, -5.15, 5.15)
 	target_position.y = REST_HEIGHT
@@ -184,14 +184,18 @@ func _sort_static_bodies(count: int, generation: int) -> void:
 			continue
 		body.freeze = true
 		body.set_meta("settle_phase", "sorting")
-		var target_value := int(body.get_meta("target_value", 1))
-		var final_basis := _top_basis(target_value, bool(body.get_meta("target_tilted", false)))
-		var sorting := create_tween().set_parallel(true)
-		sorting.tween_property(body, "position", _settled_position(index, count), SORT_SECONDS).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		sorting.tween_property(body, "quaternion", final_basis.get_rotation_quaternion(), SORT_SECONDS).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		var landing_basis := body.basis
+		var final_position := _settled_position(index, count)
+		var lifted_position := body.position
+		lifted_position.y += 0.14
+		var sorting := create_tween()
+		sorting.tween_interval(float(index) * 0.045)
+		sorting.tween_property(body, "position", lifted_position, SORT_LIFT_SECONDS).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		sorting.tween_property(body, "position", final_position, SORT_SLIDE_SECONDS).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		sorting.finished.connect(func() -> void:
 			if generation == _generation and is_instance_valid(body):
-				body.basis = final_basis
+				# Sorting is positional only: retain the exact face and yaw seen at landing.
+				body.basis = landing_basis
 				body.set_meta("settle_phase", "settled")
 		)
 
@@ -268,20 +272,20 @@ func _build_world() -> void:
 	_viewport.add_child(_world)
 
 	var camera := Camera3D.new()
-	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	camera.size = 7.15
-	camera.position = Vector3(0, 11.2, 4.8)
+	camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	camera.fov = 33.0
+	camera.position = Vector3(0, 10.8, 5.8)
 	camera.look_at_from_position(camera.position, Vector3(0, 0.22, 0), Vector3.UP)
 	_world.add_child(camera)
 
 	var light := DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-56, -32, 0)
-	light.light_energy = 1.2
+	light.light_energy = 0.72
 	light.shadow_enabled = true
 	_world.add_child(light)
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(-35, 145, 0)
-	fill.light_energy = 0.38
+	fill.light_energy = 0.18
 	fill.shadow_enabled = false
 	_world.add_child(fill)
 
@@ -291,7 +295,7 @@ func _build_world() -> void:
 	env.background_color = Color(0, 0, 0, 0)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color("927d66")
-	env.ambient_light_energy = 0.68
+	env.ambient_light_energy = 0.48
 	environment.environment = env
 	_world.add_child(environment)
 
@@ -318,18 +322,18 @@ func _add_boundary(position_value: Vector3, box_size: Vector3) -> void:
 func _create_die_body(index: int, data: Dictionary) -> RigidBody3D:
 	var body := RigidBody3D.new()
 	body.name = "PhysicalDie%d" % index
-	body.mass = 0.86
-	body.gravity_scale = 1.3
-	body.linear_damp = 0.82
-	body.angular_damp = 0.72
+	body.mass = randf_range(0.82, 0.90)
+	body.gravity_scale = randf_range(1.24, 1.34)
+	body.linear_damp = randf_range(0.72, 0.82)
+	body.angular_damp = randf_range(0.62, 0.72)
 	body.continuous_cd = true
 	body.contact_monitor = true
 	body.max_contacts_reported = 8
 	body.collision_layer = 1
 	body.collision_mask = 1
 	var material := PhysicsMaterial.new()
-	material.friction = 0.74
-	material.bounce = 0.3
+	material.friction = randf_range(0.70, 0.78)
+	material.bounce = randf_range(0.25, 0.32)
 	body.physics_material_override = material
 
 	var collision := CollisionShape3D.new()
@@ -340,10 +344,14 @@ func _create_die_body(index: int, data: Dictionary) -> RigidBody3D:
 
 	var core := MeshInstance3D.new()
 	var core_box := BoxMesh.new()
-	core_box.size = Vector3(0.91, 0.91, 0.91)
+	core_box.size = Vector3(0.94, 0.94, 0.94)
 	var core_material := StandardMaterial3D.new()
-	core_material.albedo_color = Color("6f5b40")
-	core_material.roughness = 0.94
+	core_material.albedo_texture = BASE_TEXTURE
+	core_material.albedo_color = Color.WHITE
+	core_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	core_material.alpha_scissor_threshold = 0.05
+	core_material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	core_material.roughness = 0.9
 	core_box.material = core_material
 	core.mesh = core_box
 	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
@@ -380,12 +388,12 @@ func _create_die_mesh(hidden: bool) -> ArrayMesh:
 			surface.add_vertex(corners[vertex_index])
 		surface.commit(mesh)
 		var face_material := StandardMaterial3D.new()
-		face_material.albedo_texture = HIDDEN_TEXTURE if hidden else FACE_TEXTURES[int(face.value) - 1]
+		face_material.albedo_texture = BASE_TEXTURE if hidden else FACE_TEXTURES[int(face.value) - 1]
 		face_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 		face_material.alpha_scissor_threshold = 0.05
 		face_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-		face_material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-		face_material.roughness = 0.88
+		face_material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		face_material.roughness = 0.92
 		mesh.surface_set_material(mesh.get_surface_count() - 1, face_material)
 	return mesh
 
